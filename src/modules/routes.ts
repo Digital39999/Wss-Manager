@@ -13,6 +13,8 @@ export default class HttpManager {
 		this.app = express();
 		this.postData = {};
 
+		this.app.use(express.json());
+
 		this.app.get('/', (req, res) => {
 			res.status(200).json({
 				status: 200,
@@ -129,8 +131,8 @@ export default class HttpManager {
 				message: 'You are not authorized to do this.',
 			});
 
-			const code = req.body.code || null;
-			const onWhere = req.body.onWhere || null;
+			const code = req.body?.code || null;
+			const onWhere = req.body?.onWhere || null;
 			const clients = client.gatewayManager?.getClients(true) || [];
 
 			if (!onWhere || !clients?.includes(onWhere)) return res.status(400).json({
