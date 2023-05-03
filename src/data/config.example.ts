@@ -1,3 +1,5 @@
+const dev = process.platform === 'win32';
+
 export default {
 	ports: {
 		ws: 3005,
@@ -5,7 +7,25 @@ export default {
 	},
 
 	token: '',
-	devMode: false,
+	devMode: dev,
+
+	stripe: {
+		key: '',
+		webhook: '',
+
+		pages: {
+			Waya: {
+				success: '',
+				cancel: '',
+				returnUrl: '',
+			},
+			StatusBot: {
+				success: '',
+				cancel: '',
+				returnUrl: '',
+			},
+		},
+	},
 
 	support: '',
 	keys: {
@@ -16,5 +36,7 @@ export default {
 	updatesCategory: '',
 	developer: '',
 
-	gatewayIdentifications: {},
+	gatewayIdentifications: {
+		// -
+	},
 };

@@ -1,15 +1,21 @@
-import { GatewayIdentifications, WsClient } from '../data/types';
-import { APIEmbed, EmbedType, Message } from 'discord.js';
+import { BaseMessage, GatewayIdentifications, MessageTypes, ResolveFunction, EventTypes, WsClient } from '../data/types';
+import { formatMessage } from './utils';
+import { randomBytes } from 'crypto';
+import { Message } from 'discord.js';
 import LoggerModule from './logger';
 import config from '../data/config';
 import ws from 'ws';
 
-export default class GatewayManager {
+abstract class BaseGatewayManager {
 	private wss: ws.Server;
-	private clients: Map<GatewayIdentifications, WsClient>;
+	public clients: Map<GatewayIdentifications, WsClient>;
+	private waitingToResend: Map<string, { lastTried: number; resolve: ResolveFunction; isStripe?: { subType: EventTypes; where: GatewayIdentifications; timeAdded?: number; } }>;
+	private waitingForResponse: Map<string, { timeAdded: number; resolve: ResolveFunction; isStripe?: { subType: EventTypes; where: GatewayIdentifications; } }>;
 
 	constructor() {
 		this.wss = new ws.Server({ port: config.ports.ws });
+		this.waitingForResponse = new Map();
+		this.waitingToResend = new Map();
 		this.clients = new Map();
 
 		this.wss.on('connection', async (socket) => {
@@ -17,59 +23,93 @@ export default class GatewayManager {
 			const identify = this.getIdentification(key as string);
 
 			if (!key || !identify) return socket.close(1008, 'You are not allowed to connect to this gateway.');
-			else socket.send(JSON.stringify({ type: 'auth', data: true }));
+			else socket.send(JSON.stringify({ type: 'auth', data: true })); // Client successfully authenticated.
 
 			LoggerModule('Gateway', `${identify} connected to the gateway.`, 'green');
 			this.clients.set(identify, { socket, lastHeartbeat: Date.now() });
 
 			socket.on('message', (data) => {
-				const message = JSON.parse(data.toString());
+				const message: BaseMessage = JSON.parse(data.toString());
 
-				if (message.type === 'heartbeat') {
-					const client = this.clients.get(identify);
-					if (client) client.lastHeartbeat = Date.now();
+				switch (message.type) {
+					case 'requireReply': {
+						if (!message.key) return;
+
+						const data = this.waitingToResend.get(message.key) || this.waitingForResponse.get(message.key);
+						if (data?.resolve) {
+							data.resolve(message.data);
+
+							this.waitingToResend.delete(message.key);
+							this.waitingForResponse.delete(message.key);
+						}
+
+						break;
+					}
 				}
+			});
+
+			socket.on('pong', () => {
+				const client = this.clients.get(identify);
+				if (client) client.lastHeartbeat = Date.now();
 			});
 
 			socket.on('close', () => {
 				this.clients.delete(identify);
 				LoggerModule('Gateway', `${identify} disconnected from the gateway.`, 'yellow');
 			});
+
+			socket.on('error', (error) => {
+				this.clients.delete(identify);
+				LoggerModule('Gateway', `${identify} disconnected from the gateway.`, 'yellow');
+				console.error(error);
+			});
 		});
 
 		this.sendHeartbeat();
+		this.handleUnresolvedPromises();
+		this.handleNondeliveredEvents();
+
 		LoggerModule('Gateway', `Listening on port ${config.ports.ws}.`, 'green');
 	}
 
-	/* ----------------------------------- Internal ----------------------------------- */
+	/* ----------------------------------- Utils ----------------------------------- */
 
 	private async waitForAuth(socket: ws.WebSocket) {
 		return new Promise<string | null>((resolve) => {
 			setTimeout(() => resolve(null), 15000); // 15 seconds
 
-			socket.on('message', (data) => {
-				const message = JSON.parse(data.toString());
-
-				if (message?.type === 'auth') resolve(message?.data);
+			socket.once('message', (data) => {
+				const message: BaseMessage = JSON.parse(data.toString());
+				if (message.type === 'auth') resolve(message.key as string);
 				else resolve(null);
 			});
 		});
 	}
 
-	private async waitForEval(key: GatewayIdentifications) {
-		return new Promise<null | unknown>((resolve) => {
-			const client = this.clients.get(key);
-			if (!client) return resolve(null);
+	private handleUnresolvedPromises() {
+		setInterval(() => {
+			for (const [key, value] of this.waitingForResponse) {
+				if (Date.now() - value.timeAdded > 20000) {
+					if (value.isStripe) this.waitingToResend.set(key, { ...value, lastTried: Date.now() });
+					this.waitingForResponse.delete(key);
+				}
+			}
+		}, 20000); // 20 seconds
+	}
 
-			setTimeout(() => resolve(null), 30000); // 30 seconds
+	private handleNondeliveredEvents() {
+		setInterval(() => {
+			for (const [key, value] of this.waitingToResend) {
+				if (Date.now() - value.lastTried > 20000) {
+					this.send(value.isStripe?.where as GatewayIdentifications, 'requireReply', value.resolve, value.isStripe?.subType, undefined, key);
 
-			client.socket.on('message', (data) => {
-				const message = JSON.parse(data.toString());
-
-				if (message?.type === 'eval') resolve(message?.data);
-				else resolve(null);
-			});
-		});
+					this.waitingToResend.set(key, {
+						...value,
+						lastTried: Date.now(),
+					});
+				}
+			}
+		}, 20000); // 20 seconds
 	}
 
 	private getIdentification(key: string) {
@@ -81,10 +121,11 @@ export default class GatewayManager {
 		setInterval(() => {
 			for (const [key, client] of this.clients) {
 				if ((Date.now() - (client.lastHeartbeat || 0)) > 90000) { // 1 minute 30 seconds
-					client.socket.close(4000, 'Heartbeat timeout.'); this.clients.delete(key);
+					client.socket.close(4000, 'Heartbeat timeout.');
+					this.clients.delete(key);
 				}
 
-				client.socket.send(JSON.stringify({ type: 'heartbeat' }));
+				client.socket.ping();
 			}
 		}, 45000); // 45 seconds
 	}
@@ -95,16 +136,28 @@ export default class GatewayManager {
 		return [...this.clients.keys(), ...(withWss ? ['wss'] : [])];
 	}
 
-	public send(identify: GatewayIdentifications, data: object) {
+	public send(identify: GatewayIdentifications, type: MessageTypes, data: object | string, subType?: EventTypes, checkSuccess?: boolean, _key?: string) {
 		const client = this.clients.get(identify);
 		if (!client) return LoggerModule('Gateway', `${identify} is not connected to the gateway.`, 'red');
 
 		try {
-			client.socket.send(JSON.stringify({
-				type: 'send', data,
-			}));
+			if (checkSuccess) {
+				const key = randomBytes(16).toString('hex');
 
-			return true;
+				client.socket.send(JSON.stringify({
+					type: type, data, key, subType,
+				}));
+
+				return new Promise((resolve) => {
+					this.waitingForResponse.set(key, { timeAdded: Date.now(), resolve, isStripe: subType ? { subType, where: identify } : undefined });
+				});
+			} else {
+				client.socket.send(JSON.stringify({
+					type: type, data, subType, key: _key || undefined,
+				}));
+
+				return true;
+			}
 		} catch (error) {
 			LoggerModule('Gateway', `Failed to send data to ${identify} gateway.`, 'red');
 			console.error(error);
@@ -123,11 +176,11 @@ export default class GatewayManager {
 		return true;
 	}
 
-	public broadcast(data: object) {
+	public broadcast(type: MessageTypes, data: object) {
 		for (const [key, client] of this.clients) {
 			try {
 				client.socket.send(JSON.stringify({
-					type: 'broadcast', data,
+					type: type, data,
 				}));
 			} catch (error) {
 				LoggerModule('Gateway', `Failed to send data to ${key} gateway.`, 'red');
@@ -136,34 +189,23 @@ export default class GatewayManager {
 		}
 	}
 
-	public requestRestart() {
-		this.broadcast({
-			type: 'restart',
-		});
-	}
-
 	public async evaluate(where: GatewayIdentifications, code: string) {
 		const client = this.clients.get(where);
 		if (!client) return LoggerModule('Gateway', `${where} is not connected to the gateway.`, 'red');
 
-		try {
-			client.socket.send(JSON.stringify({
-				type: 'eval', data: code,
-			}));
+		return await this.send(where, 'eval', code, undefined, true);
+	}
+}
 
-			return await this.waitForEval(where);
-		} catch (error) {
-			LoggerModule('Gateway', `Failed to send data to ${where} gateway.`, 'red');
-			console.error(error);
-		}
-
-		return null;
+export default class GatewayManager extends BaseGatewayManager {
+	constructor() {
+		super();
 	}
 
 	/* ----------------------------------- System Updates ----------------------------------- */
 
 	public async processSystemMessage(message: Message) {
-		const client = this.clients.get('SystemUpdates');
+		const client = this.clients.get('SystemUpdates'); // System Updates Internal Manager
 		if (!client) return LoggerModule('Gateway', '\'SystemUpdates\' is not connected to the gateway.', 'red');
 
 		const formatedMessage = formatMessage(message);
@@ -182,39 +224,8 @@ export default class GatewayManager {
 
 		return null;
 	}
-}
 
-/* ----------------------------------- Utils ----------------------------------- */
+	/* ----------------------------------- Stripe Subscriptions ----------------------------------- */
 
-function formatMessage(message: Message) {
-	const formatedMessage: { content: string; embeds: APIEmbed[]; files: string[]; channelId: string; } = {
-		channelId: message.channel.id,
-		content: message.content,
-		embeds: [],
-		files: [],
-	};
 
-	for (const embed of message.embeds || []) {
-		if (embed.data.type !== EmbedType.Rich) continue;
-
-		formatedMessage.embeds.push({
-			title: embed.title || undefined,
-			description: embed.description || undefined,
-			url: embed.url || undefined,
-			timestamp: embed.timestamp || undefined,
-			color: 0x5c6ceb || undefined,
-			footer: {
-				text: 'Support Us! ' + config.support,
-			},
-			thumbnail: embed.thumbnail || undefined,
-			image: embed.image || undefined,
-			fields: embed.fields,
-		});
-	}
-
-	for (const attachment of message.attachments.values() || []) {
-		formatedMessage.files.push(attachment.url);
-	}
-
-	return formatedMessage;
 }

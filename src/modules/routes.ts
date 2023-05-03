@@ -1,9 +1,11 @@
-import client, { evalExecute } from '../index';
-import { Activity } from 'discord.js';
+import { checkDestination, formatActivities, getIdentifierFromKey } from './utils';
+import { StripGatewayIdentifications } from '../data/types';
+import express, { Request, Response } from 'express';
+import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
 import config from '../data/config';
 import LoggerModule from './logger';
-import express from 'express';
+import Stripe from 'stripe';
 
 export default class HttpManager {
 	private app: express.Application;
@@ -13,9 +15,7 @@ export default class HttpManager {
 		this.app = express();
 		this.postData = {};
 
-		this.app.use(express.json());
-
-		this.app.get('/', (req, res) => {
+		this.app.get('/', express.json(), (req, res) => {
 			res.status(200).json({
 				status: 200,
 				message: 'Private Networking API.',
@@ -27,9 +27,31 @@ export default class HttpManager {
 
 	/* ----------------------------------- Internal ----------------------------------- */
 
+	private _type(type: 'raw' | 'json') {
+		if (type === 'raw') return express.raw({ type: 'application/json' });
+		else return express.json();
+	}
+
+	private checkKey(req: Request, res: Response, cb: (key: StripGatewayIdentifications) => unknown) {
+		const authorization = req.headers.authorization;
+		if (!authorization) return res.status(401).json({
+			status: 401,
+			message: 'Missing authorization header.',
+		});
+
+		const key = getIdentifierFromKey(authorization);
+		if (!key) return res.status(401).json({
+			status: 401,
+			message: 'Invalid authorization header.',
+		});
+
+		return cb(key);
+	}
+
 	private async loadRoutes() {
 		await this.loadEmojis();
 		await this.evalEndpoint();
+		await this.manageStripe();
 		await this.websiteStatus();
 
 		await this.loadInternal();
@@ -38,7 +60,7 @@ export default class HttpManager {
 	/* ----------------------------------- Routes ----------------------------------- */
 
 	private async loadEmojis() {
-		this.app.get('/emojis', (req, res) => {
+		this.app.get('/emojis', express.json(), (req, res) => {
 			return res.status(200).json({
 				status: 200,
 				message: 'You maybe wondering why? Well why not?',
@@ -46,7 +68,7 @@ export default class HttpManager {
 			});
 		});
 
-		this.app.post('/emojis', (req, res) => {
+		this.app.post('/emojis', express.json(), (req, res) => {
 			if (req.headers.authorization !== config.keys.emojis) return res.status(401).json({
 				status: 401,
 				message: 'You are not authorized to do this.',
@@ -59,13 +81,12 @@ export default class HttpManager {
 			});
 
 			try {
-				const object = JSON.parse(emojis);
-				if (typeof object !== 'object') return res.status(400).json({
+				if (typeof emojis !== 'object') return res.status(400).json({
 					status: 400,
 					message: 'Invalid JSON.',
 				});
 
-				this.postData = object;
+				this.postData = emojis;
 			} catch (error) {
 				return res.status(400).json({
 					status: 400,
@@ -81,7 +102,7 @@ export default class HttpManager {
 	}
 
 	private async websiteStatus() {
-		this.app.get('/digital', async (req, res) => {
+		this.app.get('/digital', express.json(), async (req, res) => {
 			const client = await import('../index').then((module) => module.default);
 			let data = null;
 
@@ -116,16 +137,16 @@ export default class HttpManager {
 	}
 
 	private async evalEndpoint() {
-		this.app.get('/eval', (req, res) => {
+		this.app.get('/eval', express.json(), (req, res) => {
 			return res.status(200).json({
 				status: 200,
 				data: {
-					clients: client.gatewayManager?.getClients(true),
+					clients: WssManager.gatewayManager?.getClients(true),
 				},
 			});
 		});
 
-		this.app.post('/eval', async (req, res) => { // Yes, i am aware that this can be potentional security risk.
+		this.app.post('/eval', express.json(), async (req, res) => { // Yes, i am aware that this can be potentional security risk.
 			if (req.headers.authorization !== config.keys.eval) return res.status(401).json({
 				status: 401,
 				message: 'You are not authorized to do this.',
@@ -133,7 +154,7 @@ export default class HttpManager {
 
 			const code = req.body?.code || null;
 			const onWhere = req.body?.onWhere || null;
-			const clients = client.gatewayManager?.getClients(true) || [];
+			const clients = WssManager.gatewayManager?.getClients(true) || [];
 
 			if (!onWhere || !clients?.includes(onWhere)) return res.status(400).json({
 				status: 400,
@@ -159,7 +180,7 @@ export default class HttpManager {
 	}
 
 	private async loadInternal() {
-		this.app.all('*', (req, res) => {
+		this.app.all('*', express.json(), (req, res) => {
 			res.status(404).json({
 				status: 404,
 				message: 'This endpoint does not exist.',
@@ -170,62 +191,286 @@ export default class HttpManager {
 			LoggerModule('HTTP', `Listening on port ${config.ports.http}.`, 'green');
 		});
 	}
-}
 
-/* ----------------------------------- Utils ----------------------------------- */
-
-function formatActivities(activities: Activity[]) {
-	const newActivities = [];
-
-	for (const activity of activities) {
-		if (activity.name === 'Spotify') {
-			newActivities.push({
-				applicationId: activity.applicationId,
-				name: activity.name,
-				url: activity.url,
-				details: activity.details,
-				state: activity.state,
-				createdTimestamp: activity.createdTimestamp,
-				timestamps: {
-					start: activity.timestamps?.start ? new Date(activity.timestamps?.start).getTime() : null,
-					end: activity.timestamps?.end ? new Date(activity.timestamps?.end).getTime() : null,
-				},
-				assets: {
-					large: {
-						text: activity.assets?.largeText,
-						image: (activity.assets?.largeImage ? (activity.assets.largeImage.startsWith('spotify:') ? `https://i.scdn.co/image/${activity.assets.largeImage.replace(/spotify:/, '')}` : `https://i.scdn.co/image/${activity.assets.largeImage}.png`) : null),
-					},
-					small: {
-						text: activity.assets?.smallText,
-						image: (activity.assets?.smallImage ? (activity.assets.smallImage.startsWith('mp:external') ? `https://media.discordapp.net/${activity.assets.smallImage.replace(/mp:/, '')}` : `https://cdn.discordapp.com/app-assets/${activity.applicationId}/${activity.assets.smallImage}.png`) : null),
-					},
-				},
+	private async manageStripe() {
+		// https://stripe.com/docs/billing/subscriptions/webhooks#state-changes
+		this.app.post('/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+			const event = await WssManager.stripeManager?._signWebhook(req.body, req.headers['stripe-signature']);
+			if (!event?.data) return res.status(400).json({
+				status: 400,
+				message: 'Failed to sign webhook.',
 			});
-		} else {
-			if (activity.type !== 4) {
-				newActivities.push({
-					applicationId: activity.applicationId,
-					name: activity.name,
-					url: activity.url,
-					details: activity.details,
-					state: activity.state,
-					createdTimestamp: activity.createdTimestamp,
-					timestamps: {
-						start: activity.timestamps?.start ? new Date(activity.timestamps?.start).getTime() : null,
-						end: activity.timestamps?.end ? new Date(activity.timestamps?.end).getTime() : null,
-					},
-					assets: {
-						large: {
-							text: activity.assets?.largeText,
-							image: (activity.assets?.largeImage ? (activity.assets.largeImage.startsWith('mp:external') ? `https://media.discordapp.net/${activity.assets.largeImage.replace(/mp:/, '')}` : `https://cdn.discordapp.com/app-assets/${activity.applicationId}/${activity.assets.largeImage}.png`) : null),
-						},
-						small: {
-							text: activity.assets?.smallText,
-							image: (activity.assets?.smallImage ? (activity.assets.smallImage.startsWith('mp:external') ? `https://media.discordapp.net/${activity.assets.smallImage.replace(/mp:/, '')}` : `https://cdn.discordapp.com/app-assets/${activity.applicationId}/${activity.assets.smallImage}.png`) : null),
-						},
-					},
-				});
+
+			const clientId = checkDestination(event);
+			if (!clientId) return res.status(400).json({
+				status: 400,
+				message: 'Invalid destination or type. ClientId: ' + clientId + '.',
+			});
+
+			switch (event.type) {
+				case 'checkout.session.completed': {
+					const session: { data: null | Stripe.Checkout.Session, previous: Record<string, string> | null; } = { data: null, previous: null };
+
+					if (typeof event.data.object === 'string') session.data = await WssManager.stripeManager?.getSession(clientId, { sessionId: event.data.object }) || null;
+					else session.data = event.data.object as Stripe.Checkout.Session;
+
+					session.previous = event.data.previous_attributes as Record<string, string> || null;
+
+					if (!session.data) return res.status(400).json({
+						status: 400,
+						message: 'Failed to get session.',
+					});
+
+					if (session.data.subscription) return res.status(200).json({
+						status: 200,
+						message: 'Thanks but no thanks, only one time payments accepted.',
+					});
+
+					if (session.data.payment_status === 'paid' && session.previous?.payment_status !== 'paid') {
+						WssManager.gatewayManager?.send(clientId, 'requireReply', session.data, 'oneTimePaid');
+					}
+
+					break;
+				}
+				case 'customer.subscription.updated': {
+					const subscription: { data: null | Stripe.Subscription, previous: Record<string, string> | null; } = { data: null, previous: null };
+
+					if (typeof event.data.object === 'string') subscription.data = await WssManager.stripeManager?.getUserSubscriptions(clientId, { subscriptionId: event.data.object }) || null;
+					else subscription.data = event.data.object as Stripe.Subscription;
+
+					subscription.previous = event.data.previous_attributes as Record<string, string> || null;
+
+					if (!subscription.data) return res.status(400).json({
+						status: 400,
+						message: 'Failed to get subscription.',
+					});
+
+					if (subscription.data.status === 'active' && typeof subscription.previous?.status === 'string' && subscription.previous?.status !== 'active') {
+						WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'started');
+					} else if (!subscription.previous.cancel_at_period_end && subscription.data.cancel_at_period_end) {
+						WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'canceled');
+					} else WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'other');
+
+					break;
+				}
+				case 'customer.subscription.deleted': {
+					const subscription: { data: null | Stripe.Subscription } = { data: null };
+
+					if (typeof event.data.object === 'string') subscription.data = await WssManager.stripeManager?.getUserSubscriptions(clientId, { subscriptionId: event.data.object }) || null;
+					else subscription.data = event.data.object as Stripe.Subscription;
+
+					if (!subscription.data) return res.status(400).json({
+						status: 400,
+						message: 'Failed to get subscription.',
+					});
+
+					WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'ended');
+					break;
+				}
+				case 'invoice.payment_failed': case 'invoice.payment_action_required': {
+					const invoice: { data: null | Stripe.Invoice } = { data: null };
+
+					if (typeof event.data.object === 'string') invoice.data = await WssManager.stripeManager?.getUserInvoices(clientId, { invoiceId: event.data.object }) || null;
+					else invoice.data = event.data.object as Stripe.Invoice;
+
+					if (!invoice.data || !invoice.data?.subscription) return res.status(400).json({
+						status: 400,
+						message: 'Failed to get invoice.',
+					});
+
+					WssManager.gatewayManager?.send(clientId, 'requireReply', invoice.data, 'unpaid');
+					break;
+				}
+				default: {
+					WssManager.gatewayManager?.send(clientId, 'raw', event.data.object, 'other');
+					break;
+				}
 			}
-		}
+
+			return res.status(200).json({
+				status: 200,
+				message: 'Successfully signed webhook.',
+			});
+		});
+
+		this.app.get('/stripe/customers', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const customers = await WssManager.stripeManager?.getAllCustomers(key);
+			if (!customers) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch customers.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: customers,
+			});
+		}));
+
+		this.app.get('/stripe/customers/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const customer = await WssManager.stripeManager?.getCustomer(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.query.create === 'true');
+			if (!customer) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch customer.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: customer,
+			});
+		}));
+
+		this.app.get('/stripe/sessions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const session = await WssManager.stripeManager?.getSession(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id });
+			if (!session) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch session.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: session,
+			});
+		}));
+
+		this.app.get('/stripe/subscriptions', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const subscriptions = await WssManager.stripeManager?.getAllSubscriptions(key);
+			if (!subscriptions) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch subscriptions.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: subscriptions,
+			});
+		}));
+
+		this.app.get('/stripe/subscriptions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const subscriptions = await WssManager.stripeManager?.getUserSubscriptions(key, { [req.params.type === 'stripe' ? 'customerId' : req.params.type === 'subscription' ? 'subscriptionId' : 'identify']: req.params.id });
+			if (!subscriptions) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch subscriptions.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: subscriptions,
+			});
+		}));
+
+		this.app.get('/stripe/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const coupons = await WssManager.stripeManager?.managecoupons(key, 'getAll');
+			if (!coupons) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch coupons.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: coupons,
+			});
+		}));
+
+		this.app.get('/stripe/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'get', { code: req.params.id }, req.query.create === 'true');
+			if (!cupoun) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch cupoun.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: cupoun,
+			});
+		}));
+
+		this.app.post('/stripe/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key || !req.body.code || !req.body.percentage || !req.body.duration || !req.body.maxClaims) return;
+
+			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'create', { code: req.body.code, percentage: req.body.percentage, duration: req.body.duration, maxClaims: req.body.maxClaims });
+			if (!cupoun) return res.status(400).json({
+				status: 400,
+				message: 'Failed to create cupoun.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: cupoun,
+			});
+		}));
+
+		this.app.delete('/stripe/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'delete', { code: req.params.id });
+			if (!cupoun) return res.status(400).json({
+				status: 400,
+				message: 'Failed to delete cupoun.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: cupoun,
+			});
+		}));
+
+		this.app.get('/stripe/portal/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const portal = await WssManager.stripeManager?.createPortalSession(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id });
+			if (!portal) return res.status(400).json({
+				status: 400,
+				message: 'Failed to fetch portal.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: portal,
+			});
+		}));
+
+		this.app.post('/stripe/checkout/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const checkout = await WssManager.stripeManager?.[key === 'StatusBot' ? 'createStatusSubscription' : 'createWayaSubscription']({ [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.body || {});
+			if (!checkout) return res.status(400).json({
+				status: 400,
+				message: 'Failed to create checkout session.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: checkout,
+			});
+		}));
+
+		this.app.post('/stripe/payment/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+			if (!key) return;
+
+			const payment = await WssManager.stripeManager?.createOneTimePayment(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.body || {});
+			if (!payment) return res.status(400).json({
+				status: 400,
+				message: 'Failed to create payment session.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: payment,
+			});
+		}));
 	}
 }

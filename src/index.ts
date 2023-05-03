@@ -2,6 +2,7 @@ import { ActivityType, ChannelType, Client, GatewayIntentBits, Options } from 'd
 import { CustomClient, GatewayIdentifications } from './data/types';
 import LoggerModule, { LoggerBoot } from './modules/logger';
 import GatewayManager from './modules/gateway';
+import StripeManager from './modules/stripe';
 import HttpManager from './modules/routes';
 import config from './data/config';
 
@@ -67,6 +68,7 @@ const WssManager: CustomClient = new Client({
 /* ----------------------------------- Custom ----------------------------------- */
 
 WssManager.httpManager = new HttpManager();
+WssManager.stripeManager = new StripeManager();
 WssManager.gatewayManager = new GatewayManager();
 
 /* ----------------------------------- Functions ----------------------------------- */
@@ -109,6 +111,7 @@ WssManager.on('ready', () => {
 WssManager.on('messageCreate', async (message) => {
 	if (message.channel.type !== ChannelType.GuildText) return;
 	if (message.channel.parentId !== config.updatesCategory) return;
+	if (message.channelId === '1008667474922848316') message.crosspost(); // Someones's
 
 	await WssManager.gatewayManager?.processSystemMessage(message);
 });
