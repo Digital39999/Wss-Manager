@@ -209,20 +209,9 @@ export default class GatewayManager extends BaseGatewayManager {
 		if (!client) return LoggerModule('Gateway', '\'SystemUpdates\' is not connected to the gateway.', 'red');
 
 		const formatedMessage = formatMessage(message);
+		this.send('SystemUpdates', 'requireReply', formatedMessage, 'systemMessage');
 
-		try {
-			client.socket.send(JSON.stringify({
-				type: 'systemMessage',
-				data: formatedMessage,
-			}));
-
-			return true;
-		} catch (error) {
-			LoggerModule('Gateway', 'Failed to send data to \'SystemUpdates\' gateway.', 'red');
-			console.error(error);
-		}
-
-		return null;
+		return true;
 	}
 
 	/* ----------------------------------- Stripe Subscriptions ----------------------------------- */
