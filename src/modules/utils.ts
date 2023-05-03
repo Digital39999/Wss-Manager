@@ -68,12 +68,16 @@ export function getIdentifierFromKey(input: string) {
 	return null;
 }
 
-export function checkDestination(event: Stripe.Event) {
+export function checkDestination(event: Stripe.Event, header?: string) {
 	const clientId = (event.data.object as Stripe.Subscription | Stripe.Invoice)?.metadata?._clientId;
 	if (!clientId) return null;
 
 	for (const key of Object.keys(config.gatewayIdentifications)) {
 		if (key.toLowerCase() === clientId.toLowerCase()) return key as StripGatewayIdentifications;
+	}
+
+	for (const [key, value] of Object.entries(config.stripe.pages)) {
+		if (value.accountId.toLowerCase() === header?.toLowerCase()) return key as StripGatewayIdentifications;
 	}
 
 	return null;

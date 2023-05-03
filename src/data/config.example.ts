@@ -15,11 +15,13 @@ export default {
 
 		pages: {
 			Waya: {
+				accountId: '',
 				success: '',
 				cancel: '',
 				returnUrl: '',
 			},
 			StatusBot: {
+				accountId: '',
 				success: '',
 				cancel: '',
 				returnUrl: '',

@@ -201,7 +201,7 @@ export default class HttpManager {
 				message: 'Failed to sign webhook.',
 			});
 
-			const clientId = checkDestination(event);
+			const clientId = checkDestination(event, req.headers['Stripe-Account'] as string);
 			if (!clientId) return res.status(400).json({
 				status: 400,
 				message: 'Invalid destination or type. ClientId: ' + clientId + '.',
