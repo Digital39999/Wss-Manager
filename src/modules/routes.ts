@@ -227,7 +227,7 @@ export default class HttpManager {
 					});
 
 					if (session.data.payment_status === 'paid' && session.previous?.payment_status !== 'paid') {
-						WssManager.gatewayManager?.send(clientId, 'requireReply', session.data, 'oneTimePaid');
+						WssManager.gatewayManager?.send(clientId, 'stripeEvent', session.data, 'oneTimePaid');
 					}
 
 					break;
@@ -246,10 +246,10 @@ export default class HttpManager {
 					});
 
 					if (subscription.data.status === 'active' && typeof subscription.previous?.status === 'string' && subscription.previous?.status !== 'active') {
-						WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'started');
+						WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'started');
 					} else if (!subscription.previous.cancel_at_period_end && subscription.data.cancel_at_period_end) {
-						WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'canceled');
-					} else WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'other');
+						WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'canceled');
+					} else WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'other');
 
 					break;
 				}
@@ -264,7 +264,7 @@ export default class HttpManager {
 						message: 'Failed to get subscription.',
 					});
 
-					WssManager.gatewayManager?.send(clientId, 'requireReply', subscription.data, 'ended');
+					WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'ended');
 					break;
 				}
 				case 'invoice.payment_failed': case 'invoice.payment_action_required': {
@@ -278,11 +278,11 @@ export default class HttpManager {
 						message: 'Failed to get invoice.',
 					});
 
-					WssManager.gatewayManager?.send(clientId, 'requireReply', invoice.data, 'unpaid');
+					WssManager.gatewayManager?.send(clientId, 'stripeEvent', invoice.data, 'unpaid');
 					break;
 				}
 				default: {
-					WssManager.gatewayManager?.send(clientId, 'raw', event.data.object, 'other');
+					WssManager.gatewayManager?.send(clientId, 'stripeEvent', event.data.object, 'other');
 					break;
 				}
 			}

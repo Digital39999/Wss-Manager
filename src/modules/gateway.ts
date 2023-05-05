@@ -1,29 +1,26 @@
-import { BaseMessage, GatewayIdentifications, MessageTypes, ResolveFunction, EventTypes, WsClient } from '../data/types';
+import { BaseMessage, GatewayIdentifications, MessageTypes, WsClient, ResponseData, EventTypes } from '../data/types';
 import { formatMessage } from './utils';
 import { randomBytes } from 'crypto';
 import { Message } from 'discord.js';
 import LoggerModule from './logger';
 import config from '../data/config';
+import WssManager from '../index';
 import ws from 'ws';
 
 abstract class BaseGatewayManager {
 	private wss: ws.Server;
 	public clients: Map<GatewayIdentifications, WsClient>;
-	private waitingToResend: Map<string, { lastTried: number; resolve: ResolveFunction; isStripe?: { subType: EventTypes; where: GatewayIdentifications; timeAdded?: number; } }>;
-	private waitingForResponse: Map<string, { timeAdded: number; resolve: ResolveFunction; isStripe?: { subType: EventTypes; where: GatewayIdentifications; } }>;
+	private waitingForResponse: Map<string, ResponseData>;
 
 	constructor() {
 		this.wss = new ws.Server({ port: config.ports.ws });
 		this.waitingForResponse = new Map();
-		this.waitingToResend = new Map();
 		this.clients = new Map();
 
-		this.wss.on('connection', async (socket) => {
-			const key = await this.waitForAuth(socket);
-			const identify = this.getIdentification(key as string);
-
-			if (!key || !identify) return socket.close(1008, 'You are not allowed to connect to this gateway.');
-			else socket.send(JSON.stringify({ type: 'auth', data: true })); // Client successfully authenticated.
+		this.wss.on('connection', async (socket, message) => {
+			const identify = this.getIdentification(message.headers?.authorization);
+			if (!message.headers?.authorization || !identify) return socket.close(1008, 'You are not allowed to connect to this gateway.');
+			else socket.send(JSON.stringify({ type: 'auth', data: { eventData: true } } as BaseMessage)); // Client successfully authenticated.
 
 			LoggerModule('Gateway', `${identify} connected to the gateway.`, 'green');
 			this.clients.set(identify, { socket, lastHeartbeat: Date.now() });
@@ -32,16 +29,16 @@ abstract class BaseGatewayManager {
 				const message: BaseMessage = JSON.parse(data.toString());
 
 				switch (message.type) {
-					case 'requireReply': {
-						if (!message.key) return;
+					case 'requireReply': case 'eval': {
+						if (!message.key) return null;
+						const data = this.waitingForResponse.get(message.key);
 
-						const data = this.waitingToResend.get(message.key) || this.waitingForResponse.get(message.key);
 						if (data?.resolve) {
-							data.resolve(message.data);
-
-							this.waitingToResend.delete(message.key);
+							data.resolve(message.data.eventData);
 							this.waitingForResponse.delete(message.key);
 						}
+
+						WssManager.localDataBase?.delete({ key: message.key });
 
 						break;
 					}
@@ -74,37 +71,38 @@ abstract class BaseGatewayManager {
 
 	/* ----------------------------------- Utils ----------------------------------- */
 
-	private async waitForAuth(socket: ws.WebSocket) {
-		return new Promise<string | null>((resolve) => {
-			setTimeout(() => resolve(null), 15000); // 15 seconds
-
-			socket.once('message', (data) => {
-				const message: BaseMessage = JSON.parse(data.toString());
-				if (message.type === 'auth') resolve(message.key as string);
-				else resolve(null);
-			});
-		});
-	}
-
 	private handleUnresolvedPromises() {
 		setInterval(() => {
-			for (const [key, value] of this.waitingForResponse) {
-				if (Date.now() - value.timeAdded > 20000) {
-					if (value.isStripe) this.waitingToResend.set(key, { ...value, lastTried: Date.now() });
-					this.waitingForResponse.delete(key);
+			for (const packet of this.waitingForResponse.values()) {
+				if ((Date.now() - packet.timeAdded) > 20000) { // 20 seconds
+					this.waitingForResponse.delete(packet.keyWhichIsKey);
+
+					if (!packet.shouldWait) packet.resolve(null);
+					else WssManager.localDataBase?.get({
+						key: packet.keyWhichIsKey,
+						fromWho: packet.clientId,
+						data: packet.message,
+						lastTried: Date.now(),
+					}, true);
 				}
 			}
 		}, 20000); // 20 seconds
 	}
 
 	private handleNondeliveredEvents() {
-		setInterval(() => {
-			for (const [key, value] of this.waitingToResend) {
-				if (Date.now() - value.lastTried > 20000) {
-					this.send(value.isStripe?.where as GatewayIdentifications, 'requireReply', value.resolve, value.isStripe?.subType, undefined, key);
+		setInterval(async () => {
+			for (const packet of WssManager.localDataBase?.data || []) {
+				if ((Date.now() - packet.lastTried) > 20000) { // 20 seconds
+					const client = this.clients.get(packet.fromWho);
+					if (!client) continue;
 
-					this.waitingToResend.set(key, {
-						...value,
+					client.socket.send(JSON.stringify({
+						type: packet.data.type,
+						key: packet.key,
+						data: packet.data.data,
+					} as BaseMessage));
+
+					await WssManager.localDataBase?.update({ key: packet.key }, {
 						lastTried: Date.now(),
 					});
 				}
@@ -112,7 +110,7 @@ abstract class BaseGatewayManager {
 		}, 20000); // 20 seconds
 	}
 
-	private getIdentification(key: string) {
+	private getIdentification(key?: string) {
 		const identification = Object.entries(config.gatewayIdentifications).find(([, value]) => value === key);
 		return identification ? identification[0] as GatewayIdentifications : null;
 	}
@@ -136,28 +134,79 @@ abstract class BaseGatewayManager {
 		return [...this.clients.keys(), ...(withWss ? ['wss'] : [])];
 	}
 
-	public send(identify: GatewayIdentifications, type: MessageTypes, data: object | string, subType?: EventTypes, checkSuccess?: boolean, _key?: string) {
+	public send(identify: GatewayIdentifications, type: MessageTypes, data: object | string, eventType?: EventTypes): boolean | null {
 		const client = this.clients.get(identify);
-		if (!client) return LoggerModule('Gateway', `${identify} is not connected to the gateway.`, 'red');
+
+		const sendData = (key: string): Promise<unknown> => {
+			client?.socket.send(JSON.stringify({
+				type: type, key,
+				data: {
+					eventData: data,
+					eventType,
+				},
+			} as BaseMessage));
+
+			return new Promise((resolve) => {
+				this.waitingForResponse.set(key, {
+					shouldWait: type !== 'eval',
+					timeAdded: Date.now(),
+					keyWhichIsKey: key,
+					clientId: identify,
+					resolve,
+					message: {
+						type: type, key,
+						data: {
+							eventData: data,
+							eventType,
+						},
+					},
+				});
+			});
+		};
 
 		try {
-			if (checkSuccess) {
-				const key = randomBytes(16).toString('hex');
+			switch (type) {
+				case 'requireReply': case 'stripeEvent': {
+					if (!client) {
+						LoggerModule('Gateway', `${identify} is not connected to the gateway, saving.`, 'cyan');
 
-				client.socket.send(JSON.stringify({
-					type: type, data, key, subType,
-				}));
+						WssManager.localDataBase?.create({
+							key: randomBytes(16).toString('hex'),
+							fromWho: identify,
+							lastTried: Date.now(),
+							data: {
+								type: type,
+								data: {
+									eventData: data,
+									eventType,
+								},
+							},
+						});
+					} else sendData(randomBytes(16).toString('hex'));
 
-				return new Promise((resolve) => {
-					this.waitingForResponse.set(key, { timeAdded: Date.now(), resolve, isStripe: subType ? { subType, where: identify } : undefined });
-				});
-			} else {
-				client.socket.send(JSON.stringify({
-					type: type, data, subType, key: _key || undefined,
-				}));
+					break;
+				}
+				case 'eval': {
+					if (!client) return LoggerModule('Gateway', `${identify} is not connected to the gateway.`, 'red');
+					sendData(randomBytes(16).toString('hex'));
 
-				return true;
+					break;
+				}
+				default: {
+					if (!client) return LoggerModule('Gateway', `${identify} is not connected to the gateway.`, 'red');
+
+					client.socket.send(JSON.stringify({
+						type: type,
+						data: {
+							eventData: data,
+						},
+					} as BaseMessage));
+
+					break;
+				}
 			}
+
+			return true;
 		} catch (error) {
 			LoggerModule('Gateway', `Failed to send data to ${identify} gateway.`, 'red');
 			console.error(error);
@@ -180,8 +229,8 @@ abstract class BaseGatewayManager {
 		for (const [key, client] of this.clients) {
 			try {
 				client.socket.send(JSON.stringify({
-					type: type, data,
-				}));
+					type: type, data: { eventData: data },
+				} as BaseMessage));
 			} catch (error) {
 				LoggerModule('Gateway', `Failed to send data to ${key} gateway.`, 'red');
 				console.error(error);
@@ -193,7 +242,7 @@ abstract class BaseGatewayManager {
 		const client = this.clients.get(where);
 		if (!client) return LoggerModule('Gateway', `${where} is not connected to the gateway.`, 'red');
 
-		return await this.send(where, 'eval', code, undefined, true);
+		return this.send(where, 'eval', code);
 	}
 }
 
@@ -209,7 +258,7 @@ export default class GatewayManager extends BaseGatewayManager {
 		if (!client) return LoggerModule('Gateway', '\'SystemUpdates\' is not connected to the gateway.', 'red');
 
 		const formatedMessage = formatMessage(message);
-		this.send('SystemUpdates', 'requireReply', formatedMessage, 'systemMessage');
+		this.send('SystemUpdates', 'requireReply', formatedMessage);
 
 		return true;
 	}

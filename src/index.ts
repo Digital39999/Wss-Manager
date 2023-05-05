@@ -5,6 +5,7 @@ import GatewayManager from './modules/gateway';
 import StripeManager from './modules/stripe';
 import HttpManager from './modules/routes';
 import config from './data/config';
+import LocalDataBase from './modules/database/core';
 
 /* ----------------------------------- Process ----------------------------------- */
 
@@ -70,6 +71,7 @@ const WssManager: CustomClient = new Client({
 WssManager.httpManager = new HttpManager();
 WssManager.stripeManager = new StripeManager();
 WssManager.gatewayManager = new GatewayManager();
+WssManager.localDataBase = new LocalDataBase();
 
 /* ----------------------------------- Functions ----------------------------------- */
 
