@@ -1,15 +1,15 @@
-import { SubWho } from '../data/types';
+import { GatewayIdentifications } from '../data/types';
 import LoggerModule from './logger';
 import config from '../data/config';
 import Stripe from 'stripe';
 
 export default class StripeManager {
 	private stripeClient: Stripe;
+	private stripeDevClient: Stripe;
 
 	constructor() {
-		this.stripeClient = new Stripe(config.stripe.key, {
-			apiVersion: '2022-11-15',
-		});
+		this.stripeClient = new Stripe(config.stripe.key, { apiVersion: '2022-11-15' });
+		this.stripeDevClient = new Stripe(config.stripe.devKey, { apiVersion: '2022-11-15' });
 	}
 
 	/* ----------------------------------- Internal ----------------------------------- */
@@ -21,11 +21,11 @@ export default class StripeManager {
 		};
 	}
 
-	public async _signWebhook(body: Buffer, header?: string | string[]) {
+	public async _signWebhook(body: Buffer, header?: string | string[], isDev?: boolean) {
 		if (!header || !header.length) return null;
 
 		try {
-			return this.stripeClient.webhooks.constructEvent(body, (Array.isArray(header) ? header.find((h) => !!h) : header) as string, config.stripe.webhook);
+			return this[(isDev ? 'stripeDevClient' : 'stripeClient')].webhooks.constructEvent(body, (Array.isArray(header) ? header.find((h) => !!h) : header) as string, config.stripe[(isDev ? 'devWebhook' : 'webhook')]);
 		} catch (err: unknown) {
 			LoggerModule('Stripe', 'Failed to construct webhook events.', 'red');
 			console.log(err);
@@ -36,20 +36,20 @@ export default class StripeManager {
 	/* ----------------------------------- Mutual ----------------------------------- */
 
 	// Customers.
-	public async getCustomer<T extends boolean>(who: SubWho, options: { identify?: string; customerId?: string; }, createOnFail?: T): Promise<Stripe.Customer | null> {
+	public async getCustomer<T extends boolean>(who: GatewayIdentifications, options: { identify?: string; customerId?: string; }, createOnFail?: T): Promise<Stripe.Customer | null> {
 		if (!options.identify && !options.customerId) return null;
 
 		let customer: Stripe.Customer | null;
 		if (options.identify) {
 			const idAndEmail = this._convertUser(options.identify);
 
-			customer = await this.stripeClient.customers.list({ email: idAndEmail.email }).then((customers) => customers?.data.find((customerData) => customerData.metadata?.userId === idAndEmail.userId && customerData.metadata?._clientId === who)) || null;
-		} else customer = await this.stripeClient.customers.retrieve(options.customerId || '').catch(() => null) as Stripe.Customer;
+			customer = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].customers.list({ email: idAndEmail.email }).then((customers) => customers?.data.find((customerData) => customerData.metadata?.userId === idAndEmail.userId && customerData.metadata?._clientId === who)) || null;
+		} else customer = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].customers.retrieve(options.customerId || '').catch(() => null) as Stripe.Customer;
 
 		if (!customer && createOnFail && options.identify) {
 			const idAndEmail = this._convertUser(options.identify);
 
-			customer = await this.stripeClient.customers.create({
+			customer = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].customers.create({
 				email: idAndEmail.email,
 				metadata: {
 					userId: idAndEmail.userId,
@@ -61,48 +61,48 @@ export default class StripeManager {
 		return customer;
 	}
 
-	public async getAllCustomers(who: SubWho) {
-		return (await this.stripeClient.customers.list()).data?.filter((customer) => customer.metadata?._clientId === who);
+	public async getAllCustomers(who: GatewayIdentifications) {
+		return (await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].customers.list()).data?.filter((customer) => customer.metadata?._clientId === who);
 	}
 
 	// Sessions.
-	public async getSession(who: SubWho, options: { identify?: string; customerId?: string; sessionId?: string; }): Promise<Stripe.Checkout.Session | null> {
+	public async getSession(who: GatewayIdentifications, options: { identify?: string; customerId?: string; sessionId?: string; }): Promise<Stripe.Checkout.Session | null> {
 		if (!options.identify && !options.customerId && !options.sessionId) return null;
 
 		const customer = !options.sessionId ? await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }) : null;
 
-		if (!customer) return await this.stripeClient.checkout.sessions.retrieve(options.sessionId || '');
-		else return await this.stripeClient.checkout.sessions.list({ customer: customer.id }).then((sessions) => sessions?.data.find((sessionData) => sessionData.metadata?._clientId === who)) || null;
+		if (!customer) return await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].checkout.sessions.retrieve(options.sessionId || '');
+		else return await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].checkout.sessions.list({ customer: customer.id }).then((sessions) => sessions?.data.find((sessionData) => sessionData.metadata?._clientId === who)) || null;
 	}
 
 	// Subscriptions.
-	public async getAllSubscriptions(who: SubWho): Promise<Stripe.Subscription[] | null> {
-		return (await this.stripeClient.subscriptions.list()).data?.filter((subscription) => subscription.metadata?._clientId === who);
+	public async getAllSubscriptions(who: GatewayIdentifications): Promise<Stripe.Subscription[] | null> {
+		return (await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].subscriptions.list()).data?.filter((subscription) => subscription.metadata?._clientId === who);
 	}
 
-	public async getUserSubscriptions<T extends { identify?: string; customerId?: string; subscriptionId?: string; }>(who: SubWho, options: T): Promise<(T['subscriptionId'] extends string ? Stripe.Subscription : Stripe.Subscription[]) | null> {
+	public async getUserSubscriptions<T extends { identify?: string; customerId?: string; subscriptionId?: string; }>(who: GatewayIdentifications, options: T): Promise<(T['subscriptionId'] extends string ? Stripe.Subscription : Stripe.Subscription[]) | null> {
 		type Internal = (T['subscriptionId'] extends string ? Stripe.Subscription : Stripe.Subscription[]) | null;
 		if (options.subscriptionId) {
-			const subscription = await this.stripeClient.subscriptions.retrieve(options.subscriptionId);
+			const subscription = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].subscriptions.retrieve(options.subscriptionId);
 			return subscription.metadata?._clientId === who ? subscription as unknown as Internal : null as Internal;
 		}
 
 		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, true);
 		if (!customer) return null;
 
-		return ((await this.stripeClient.subscriptions.list({ customer: customer.id })).data?.find((subscription) => subscription.metadata?._clientId === who) || null) as Internal;
+		return ((await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].subscriptions.list({ customer: customer.id })).data?.find((subscription) => subscription.metadata?._clientId === who) || null) as Internal;
 	}
 
 	// Coupons.
-	public async managecoupons<T extends ('get' | 'getAll' | 'create' | 'delete')>(who: SubWho, action: T, data?: { code: string; percentage?: number; duration?: Stripe.CouponCreateParams.Duration; maxClaims?: number; }, createOnFail?: boolean): Promise<(T extends 'getAll' ? Stripe.Coupon[] : (T extends 'delete' ? Stripe.DeletedCoupon : Stripe.Coupon)) | null> {
+	public async managecoupons<T extends ('get' | 'getAll' | 'create' | 'delete')>(who: GatewayIdentifications, action: T, data?: { code: string; percentage?: number; duration?: Stripe.CouponCreateParams.Duration; maxClaims?: number; }, createOnFail?: boolean): Promise<(T extends 'getAll' ? Stripe.Coupon[] : (T extends 'delete' ? Stripe.DeletedCoupon : Stripe.Coupon)) | null> {
 		type Internal = (T extends 'getAll' ? Stripe.Coupon[] : (T extends 'delete' ? Stripe.DeletedCoupon : Stripe.Coupon)) | null;
 
 		switch (action) {
 			case 'get': {
-				const coupon = (await this.stripeClient.coupons.list()).data.find((cupounData) => cupounData.name === data?.code) || null;
+				const coupon = (await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].coupons.list()).data.find((cupounData) => cupounData.name === data?.code) || null;
 
 				if (!coupon && createOnFail) {
-					const newCoupon = await this.stripeClient.coupons.create({
+					const newCoupon = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].coupons.create({
 						name: data?.code,
 						percent_off: data?.percentage,
 						duration: data?.duration || 'once',
@@ -118,14 +118,14 @@ export default class StripeManager {
 				return coupon as Internal;
 			}
 			case 'getAll': {
-				const coupons = (await this.stripeClient.coupons.list()).data.filter((cupounData) => cupounData.metadata?._clientId === who) || null;
+				const coupons = (await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].coupons.list()).data.filter((cupounData) => cupounData.metadata?._clientId === who) || null;
 				return coupons as Internal;
 			}
 			case 'create': {
-				const check = (await this.stripeClient.coupons.list()).data?.find((cupounData) => (cupounData.name === data?.code || cupounData.id === data?.code)) || null;
+				const check = (await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].coupons.list()).data?.find((cupounData) => (cupounData.name === data?.code || cupounData.id === data?.code)) || null;
 				if (check) return null;
 
-				const coupon = await this.stripeClient.coupons.create({
+				const coupon = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].coupons.create({
 					name: data?.code,
 					percent_off: data?.percentage,
 					duration: data?.duration || 'once',
@@ -138,10 +138,10 @@ export default class StripeManager {
 				return coupon as Internal;
 			}
 			case 'delete': {
-				const coupon = (await this.stripeClient.coupons.list()).data.find((cupounData) => (cupounData.name === data?.code || cupounData.id === data?.code)) || null;
+				const coupon = (await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].coupons.list()).data.find((cupounData) => (cupounData.name === data?.code || cupounData.id === data?.code)) || null;
 				if (!coupon) return null;
 
-				return await this.stripeClient.coupons.del(coupon.id) as unknown as Internal;
+				return await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].coupons.del(coupon.id) as unknown as Internal;
 			}
 			default: {
 				return null;
@@ -150,13 +150,13 @@ export default class StripeManager {
 	}
 
 	// Customer Portal.
-	public async createPortalSession(who: SubWho, options: { identify?: string; customerId?: string; }, flowType?: ('payment_method_update' | 'subscription_cancel')) {
+	public async createPortalSession(who: GatewayIdentifications, options: { identify?: string; customerId?: string; }, flowType?: ('payment_method_update' | 'subscription_cancel')) {
 		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, true);
 		if (!customer) return null;
 
-		return await this.stripeClient.billingPortal.sessions.create({
+		return await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].billingPortal.sessions.create({
 			customer: customer.id,
-			return_url: config.stripe.pages[who].returnUrl,
+			return_url: config.stripe.pages[(who.includes('|') ? who.split('|')[0] : who) as keyof typeof config.stripe.pages].returnUrl,
 			flow_data: flowType ? {
 				type: flowType,
 			} : undefined,
@@ -164,33 +164,33 @@ export default class StripeManager {
 	}
 
 	// Invoices.
-	public async getAllInvoices(who: SubWho): Promise<Stripe.Invoice[] | null> {
-		return (await this.stripeClient.invoices.list()).data?.filter((invoice) => invoice.metadata?._clientId === who);
+	public async getAllInvoices(who: GatewayIdentifications): Promise<Stripe.Invoice[] | null> {
+		return (await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].invoices.list()).data?.filter((invoice) => invoice.metadata?._clientId === who);
 	}
 
-	public async getUserInvoices<T extends { identify?: string; customerId?: string; invoiceId?: string; }>(who: SubWho, options: T): Promise<(T['invoiceId'] extends string ? Stripe.Invoice : Stripe.Invoice[]) | null> {
+	public async getUserInvoices<T extends { identify?: string; customerId?: string; invoiceId?: string; }>(who: GatewayIdentifications, options: T): Promise<(T['invoiceId'] extends string ? Stripe.Invoice : Stripe.Invoice[]) | null> {
 		type Internal = (T['invoiceId'] extends string ? Stripe.Invoice : Stripe.Invoice[]) | null;
 		if (options.invoiceId) {
-			const invoice = await this.stripeClient.invoices.retrieve(options.invoiceId);
+			const invoice = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].invoices.retrieve(options.invoiceId);
 			return invoice.metadata?._clientId === who ? invoice as unknown as Internal : null as Internal;
 		}
 
 		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, true);
 		if (!customer) return null;
 
-		return ((await this.stripeClient.invoices.list({ customer: customer.id })).data?.find((invoice) => invoice.metadata?._clientId === who) || null) as Internal;
+		return ((await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].invoices.list({ customer: customer.id })).data?.find((invoice) => invoice.metadata?._clientId === who) || null) as Internal;
 	}
 
 	// One Time Payment.
-	public async createOneTimePayment(who: SubWho, options: { identify?: string; customerId?: string; }, data?: Record<string, string | number | undefined | Record<string, string | number>>): Promise<Stripe.Checkout.Session | null> {
+	public async createOneTimePayment(who: GatewayIdentifications, options: { identify?: string; customerId?: string; }, data?: Record<string, string | number | undefined | Record<string, string | number>>): Promise<Stripe.Checkout.Session | null> {
 		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, true);
 		if (!customer || typeof data?.amount !== 'number') return null;
 
-		const session = await this.stripeClient.checkout.sessions.create({
+		const session = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].checkout.sessions.create({
 			customer: customer.id,
 			client_reference_id: customer.metadata.userId,
-			success_url: config.stripe.pages[who].success,
-			cancel_url: config.stripe.pages[who].cancel,
+			success_url: config.stripe.pages[(who.includes('|') ? who.split('|')[0] : who) as keyof typeof config.stripe.pages].success,
+			cancel_url: config.stripe.pages[(who.includes('|') ? who.split('|')[0] : who) as keyof typeof config.stripe.pages].cancel,
 			mode: 'payment',
 			allow_promotion_codes: true,
 			metadata: {
@@ -214,11 +214,11 @@ export default class StripeManager {
 
 	/* ----------------------------------- Waya ----------------------------------- */
 
-	public async createWayaSubscription(options: { identify?: string; customerId?: string; }, data?: Record<string, string | number | undefined | Record<string, string | number>>): Promise<Stripe.Checkout.Session | null> {
-		const customer = await this.getCustomer('Waya', { identify: options.identify, customerId: options.customerId }, true);
+	public async createWayaSubscription(who: GatewayIdentifications, options: { identify?: string; customerId?: string; }, data?: Record<string, string | number | undefined | Record<string, string | number>>): Promise<Stripe.Checkout.Session | null> {
+		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, true);
 		if (!customer) return null;
 
-		const session = await this.stripeClient.checkout.sessions.create({
+		const session = await this[(who.includes('|') ? 'stripeDevClient' : 'stripeClient')].checkout.sessions.create({
 			customer: customer.id,
 			client_reference_id: customer.metadata.userId,
 			success_url: config.stripe.pages.Waya.success,

@@ -1,5 +1,5 @@
 import { Message, APIEmbed, EmbedType, Activity } from 'discord.js';
-import { StripGatewayIdentifications } from '../data/types';
+import { GatewayIdentifications } from '../data/types';
 import config from '../data/config';
 import Stripe from 'stripe';
 
@@ -61,23 +61,26 @@ export function formatActivities(activities: Activity[]) {
 	});
 }
 
-export function getIdentifierFromKey(input: string) {
+export function getIdentifierFromKey(input: string, isDev?: boolean): GatewayIdentifications | null {
 	const index = Object.values(config.gatewayIdentifications).indexOf(input);
-	if (index > -1) return Object.keys(config.gatewayIdentifications)[index] as StripGatewayIdentifications;
+	if (index > -1) {
+		const clients = Object.keys(config.gatewayIdentifications)[index];
+		return (isDev ? clients + '|Dev' : clients) as GatewayIdentifications;
+	}
 
 	return null;
 }
 
-export function checkDestination(event: Stripe.Event, header?: string) {
-	const clientId = (event.data.object as Stripe.Subscription | Stripe.Invoice)?.metadata?._clientId;
+export function checkDestination(event: Stripe.Event, header?: string, isDev?: boolean) {
+	const clientId = isDev ? (event.data.object as Stripe.Subscription | Stripe.Invoice)?.metadata?._clientId.split('|')[0] : (event.data.object as Stripe.Subscription | Stripe.Invoice)?.metadata?._clientId;
 	if (!clientId) return null;
 
 	for (const key of Object.keys(config.gatewayIdentifications)) {
-		if (key.toLowerCase() === clientId.toLowerCase()) return key as StripGatewayIdentifications;
+		if (key.toLowerCase() === clientId.toLowerCase()) return (isDev ? key + '|Dev' : key) as GatewayIdentifications;
 	}
 
 	for (const [key, value] of Object.entries(config.stripe.pages)) {
-		if (value.accountId.toLowerCase() === header?.toLowerCase()) return key as StripGatewayIdentifications;
+		if (value.accountId.toLowerCase() === header?.toLowerCase()) return (isDev ? key + '|Dev' : key) as GatewayIdentifications;
 	}
 
 	return null;

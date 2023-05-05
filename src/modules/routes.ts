@@ -1,5 +1,5 @@
 import { checkDestination, formatActivities, getIdentifierFromKey } from './utils';
-import { StripGatewayIdentifications } from '../data/types';
+import { GatewayIdentifications } from '../data/types';
 import express, { Request, Response } from 'express';
 import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
@@ -32,14 +32,14 @@ export default class HttpManager {
 		else return express.json();
 	}
 
-	private checkKey(req: Request, res: Response, cb: (key: StripGatewayIdentifications) => unknown) {
+	private checkKey(req: Request, res: Response, cb: (key: GatewayIdentifications) => unknown) {
 		const authorization = req.headers.authorization;
 		if (!authorization) return res.status(401).json({
 			status: 401,
 			message: 'Missing authorization header.',
 		});
 
-		const key = getIdentifierFromKey(authorization);
+		const key = getIdentifierFromKey(authorization, req.url.includes('/dev'));
 		if (!key) return res.status(401).json({
 			status: 401,
 			message: 'Invalid authorization header.',
@@ -51,8 +51,10 @@ export default class HttpManager {
 	private async loadRoutes() {
 		await this.loadEmojis();
 		await this.evalEndpoint();
-		await this.manageStripe();
 		await this.websiteStatus();
+
+		await this.manageStripe();
+		await this.manageStripe(true);
 
 		await this.loadInternal();
 	}
@@ -192,16 +194,16 @@ export default class HttpManager {
 		});
 	}
 
-	private async manageStripe() {
+	private async manageStripe(dev?: boolean) {
 		// https://stripe.com/docs/billing/subscriptions/webhooks#state-changes
-		this.app.post('/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
-			const event = await WssManager.stripeManager?._signWebhook(req.body, req.headers['stripe-signature']);
+		this.app.post((dev ? '/dev/stripe' : '/stripe'), express.raw({ type: 'application/json' }), async (req, res) => {
+			const event = await WssManager.stripeManager?._signWebhook(req.body, req.headers['stripe-signature'], dev);
 			if (!event?.data) return res.status(400).json({
 				status: 400,
 				message: 'Failed to sign webhook.',
 			});
 
-			const clientId = checkDestination(event, req.headers['Stripe-Account'] as string);
+			const clientId = checkDestination(event, req.headers['Stripe-Account'] as string, dev);
 			if (!clientId) return res.status(400).json({
 				status: 400,
 				message: 'Invalid destination or type. ClientId: ' + clientId + '.',
@@ -293,7 +295,7 @@ export default class HttpManager {
 			});
 		});
 
-		this.app.get('/stripe/customers', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/customers', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const customers = await WssManager.stripeManager?.getAllCustomers(key);
@@ -308,7 +310,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get('/stripe/customers/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/customers/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const customer = await WssManager.stripeManager?.getCustomer(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.query.create === 'true');
@@ -323,7 +325,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get('/stripe/sessions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/sessions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const session = await WssManager.stripeManager?.getSession(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id });
@@ -338,7 +340,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get('/stripe/subscriptions', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/subscriptions', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const subscriptions = await WssManager.stripeManager?.getAllSubscriptions(key);
@@ -353,7 +355,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get('/stripe/subscriptions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/subscriptions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const subscriptions = await WssManager.stripeManager?.getUserSubscriptions(key, { [req.params.type === 'stripe' ? 'customerId' : req.params.type === 'subscription' ? 'subscriptionId' : 'identify']: req.params.id });
@@ -368,7 +370,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get('/stripe/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const coupons = await WssManager.stripeManager?.managecoupons(key, 'getAll');
@@ -383,7 +385,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get('/stripe/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'get', { code: req.params.id }, req.query.create === 'true');
@@ -398,7 +400,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.post('/stripe/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.post((dev ? '/dev/stripe' : '/stripe') + '/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key || !req.body.code || !req.body.percentage || !req.body.duration || !req.body.maxClaims) return;
 
 			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'create', { code: req.body.code, percentage: req.body.percentage, duration: req.body.duration, maxClaims: req.body.maxClaims });
@@ -413,7 +415,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.delete('/stripe/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.delete((dev ? '/dev/stripe' : '/stripe') + '/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'delete', { code: req.params.id });
@@ -428,7 +430,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get('/stripe/portal/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/portal/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const portal = await WssManager.stripeManager?.createPortalSession(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id });
@@ -443,10 +445,10 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.post('/stripe/checkout/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.post((dev ? '/dev/stripe' : '/stripe') + '/checkout/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
-			const checkout = await WssManager.stripeManager?.[key === 'StatusBot' ? 'createStatusSubscription' : 'createWayaSubscription']({ [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.body || {});
+			const checkout = await WssManager.stripeManager?.[key === 'StatusBot' ? 'createStatusSubscription' : 'createWayaSubscription'](dev ? 'Waya|Dev' : 'Waya', { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.body || {});
 			if (!checkout) return res.status(400).json({
 				status: 400,
 				message: 'Failed to create checkout session.',
@@ -458,7 +460,7 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.post('/stripe/payment/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
+		this.app.post((dev ? '/dev/stripe' : '/stripe') + '/payment/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
 			if (!key) return;
 
 			const payment = await WssManager.stripeManager?.createOneTimePayment(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.body || {});

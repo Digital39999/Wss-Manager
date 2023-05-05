@@ -11,7 +11,10 @@ export default {
 
 	stripe: {
 		key: '',
+		devKey: '',
+
 		webhook: '',
+		devWebhook: '',
 
 		pages: {
 			Waya: {

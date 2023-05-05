@@ -18,7 +18,7 @@ abstract class BaseGatewayManager {
 		this.clients = new Map();
 
 		this.wss.on('connection', async (socket, message) => {
-			const identify = this.getIdentification(message.headers?.authorization);
+			const identify = this.getIdentification(message.headers?.authorization, message.url?.includes('/dev'));
 			if (!message.headers?.authorization || !identify) return socket.close(1008, 'You are not allowed to connect to this gateway.');
 			else socket.send(JSON.stringify({ type: 'auth', data: { eventData: true } } as BaseMessage)); // Client successfully authenticated.
 
@@ -110,9 +110,9 @@ abstract class BaseGatewayManager {
 		}, 20000); // 20 seconds
 	}
 
-	private getIdentification(key?: string) {
+	private getIdentification(key?: string, isDev?: boolean) {
 		const identification = Object.entries(config.gatewayIdentifications).find(([, value]) => value === key);
-		return identification ? identification[0] as GatewayIdentifications : null;
+		return identification ? (isDev ? identification[0] + '|Dev' : identification[0]) as GatewayIdentifications : null;
 	}
 
 	private sendHeartbeat() {
