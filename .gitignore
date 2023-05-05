@@ -51,4 +51,4 @@ test.js
 
 # config
 src/data/config.ts
-src/modules/database/data
+src/modules/database/data.json
