@@ -1,11 +1,11 @@
 import { ActivityType, ChannelType, Client, GatewayIntentBits, Options } from 'discord.js';
 import { CustomClient, GatewayIdentifications } from './data/types';
 import LoggerModule, { LoggerBoot } from './modules/logger';
+import LocalDataBase from './modules/database/core';
 import GatewayManager from './modules/gateway';
 import StripeManager from './modules/stripe';
 import HttpManager from './modules/routes';
 import config from './data/config';
-import LocalDataBase from './modules/database/core';
 
 /* ----------------------------------- Process ----------------------------------- */
 
@@ -43,7 +43,7 @@ const WssManager: CustomClient = new Client({
 		GuildEmojiManager: 0,
 		GuildMemberManager: {
 			maxSize: 0,
-			keepOverLimit: (member) => member.id === config.developer,
+			keepOverLimit: (member) => config.developerIds.some((id) => member.id === id),
 		},
 		GuildBanManager: 0,
 		GuildForumThreadManager: 0,
@@ -54,7 +54,7 @@ const WssManager: CustomClient = new Client({
 		MessageManager: 0,
 		PresenceManager: {
 			maxSize: 0,
-			keepOverLimit: (presence) => presence.userId === config.developer,
+			keepOverLimit: (presence) => config.developerIds.some((id) => presence.userId === id),
 		},
 		ReactionManager: 0,
 		ReactionUserManager: 0,
@@ -73,7 +73,7 @@ WssManager.stripeManager = new StripeManager();
 WssManager.gatewayManager = new GatewayManager();
 WssManager.localDataBase = new LocalDataBase();
 
-/* ----------------------------------- Functions ----------------------------------- */
+/* ----------------------------------- Utils ----------------------------------- */
 
 export function catchError(error: Error) {
 	if (error?.name?.includes('ExperimentalWarning') || error?.name?.includes('Unknown interaction')) return;
@@ -112,8 +112,8 @@ WssManager.on('ready', () => {
 
 WssManager.on('messageCreate', async (message) => {
 	if (message.channel.type !== ChannelType.GuildText) return;
-	if (message.channel.parentId !== config.updatesCategory) return;
-	if (message.channelId === '1008667474922848316') message.crosspost(); // Someones's
+	if (message.channel.parentId !== config.systemUpdatesCategory) return;
+	if (message.channelId === '1104023489381412897') message.crosspost(); // Someones's Media
 
 	await WssManager.gatewayManager?.processSystemMessage(message);
 });

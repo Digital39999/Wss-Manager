@@ -131,7 +131,7 @@ abstract class BaseGatewayManager {
 	/* ----------------------------------- Socket ----------------------------------- */
 
 	public getClients(withWss?: boolean) {
-		return [...this.clients.keys(), ...(withWss ? ['wss'] : [])];
+		return [...this.clients.keys(), ...(withWss ? ['Wss'] : [])];
 	}
 
 	public send(identify: GatewayIdentifications, type: MessageTypes, data: object | string, eventType?: EventTypes): boolean | null {
@@ -258,7 +258,7 @@ export default class GatewayManager extends BaseGatewayManager {
 		if (!client) return LoggerModule('Gateway', '\'SystemUpdates\' is not connected to the gateway.', 'red');
 
 		const formatedMessage = formatMessage(message);
-		this.send('SystemUpdates', 'requireReply', formatedMessage);
+		this.send('SystemUpdates', 'requireReply', formatedMessage, 'systemMessage');
 
 		return true;
 	}

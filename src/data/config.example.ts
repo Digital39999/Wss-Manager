@@ -6,42 +6,61 @@ export default {
 		http: 3006,
 	},
 
-	token: '',
+	token: dev ? '' : '',
 	devMode: dev,
 
 	stripe: {
-		key: '',
-		devKey: '',
+		Luna: {
+			accountId: '',
+			ownedClients: ['Waya'],
 
-		webhook: '',
-		devWebhook: '',
-
-		pages: {
-			Waya: {
-				accountId: '',
-				success: '',
-				cancel: '',
-				returnUrl: '',
+			webhooks: {
+				prod: '',
+				dev: '',
 			},
-			StatusBot: {
-				accountId: '',
-				success: '',
-				cancel: '',
-				returnUrl: '',
+
+			keys: {
+				prod: '',
+				dev: '',
+			},
+
+			links: {
+				success: 'https://waya.one/checkout?session_id={CHECKOUT_SESSION_ID}',
+				cancel: 'https://waya.one/checkout?cancelled=true',
+				returnUrl: 'https://waya.one/',
+			},
+		},
+		Digital: {
+			accountId: '',
+			ownedClients: ['StatusBot'],
+
+			webhooks: {
+				prod: '',
+				dev: '',
+			},
+
+			keys: {
+				prod: '',
+				dev: '',
+			},
+
+			links: {
+				success: 'https://crni.xyz/success',
+				cancel: 'https://crni.xyz/error',
+				returnUrl: 'https://crni.xyz',
 			},
 		},
 	},
 
-	support: '',
-	keys: {
+	support: 'https://discord.gg/4rphpersCa',
+
+	clientKeys: {
 		emojis: '',
 		eval: '',
 	},
 
-	updatesCategory: '',
-	developer: '',
+	systemUpdatesCategory: '',
+	developerIds: ['797012765352001557'],
 
-	gatewayIdentifications: {
-		// -
-	},
+	gatewayIdentifications: {},
 };

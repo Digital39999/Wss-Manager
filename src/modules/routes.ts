@@ -1,19 +1,18 @@
-import { checkDestination, formatActivities, getIdentifierFromKey } from './utils';
-import { GatewayIdentifications } from '../data/types';
+import { checkBody, formatActivities, getClientFromKey, webhookEvents } from './utils';
+import { GatewayIdentifications, ParsedStripeUsers } from '../data/types';
 import express, { Request, Response } from 'express';
 import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
 import config from '../data/config';
 import LoggerModule from './logger';
-import Stripe from 'stripe';
 
 export default class HttpManager {
 	private app: express.Application;
-	private postData: Record<string, string>;
+	private liveIcons: Record<string, string>;
 
 	constructor() {
 		this.app = express();
-		this.postData = {};
+		this.liveIcons = {};
 
 		this.app.get('/', express.json(), (req, res) => {
 			res.status(200).json({
@@ -32,20 +31,27 @@ export default class HttpManager {
 		else return express.json();
 	}
 
-	private checkKey(req: Request, res: Response, cb: (key: GatewayIdentifications) => unknown) {
+	private checkKey(req: Request, res: Response, isDev: boolean, cb: (identify: { account: ParsedStripeUsers; clientId: GatewayIdentifications; } | null) => unknown) {
 		const authorization = req.headers.authorization;
 		if (!authorization) return res.status(401).json({
 			status: 401,
 			message: 'Missing authorization header.',
 		});
 
-		const key = getIdentifierFromKey(authorization, req.url.includes('/dev'));
-		if (!key) return res.status(401).json({
-			status: 401,
-			message: 'Invalid authorization header.',
-		});
+		const identify = getClientFromKey(authorization, req.url.includes('/dev'));
+		if (!identify?.account || !identify.clientId) {
+			res.status(401).json({
+				status: 401,
+				message: 'Invalid authorization header. ClientId (' + identify?.clientId + ') or Account (' + identify?.account + ') is invalid.',
+			});
 
-		return cb(key);
+			return cb(null);
+		}
+
+		return cb({
+			account: identify.account + (isDev ? '|Dev' : '') as ParsedStripeUsers,
+			clientId: identify.clientId,
+		});
 	}
 
 	private async loadRoutes() {
@@ -53,8 +59,8 @@ export default class HttpManager {
 		await this.evalEndpoint();
 		await this.websiteStatus();
 
-		await this.manageStripe();
 		await this.manageStripe(true);
+		await this.manageStripe(false);
 
 		await this.loadInternal();
 	}
@@ -66,12 +72,12 @@ export default class HttpManager {
 			return res.status(200).json({
 				status: 200,
 				message: 'You maybe wondering why? Well why not?',
-				data: { ...emojis, iconsLive: this.postData },
+				data: { ...emojis, iconsLive: this.liveIcons },
 			});
 		});
 
 		this.app.post('/emojis', express.json(), (req, res) => {
-			if (req.headers.authorization !== config.keys.emojis) return res.status(401).json({
+			if (req.headers.authorization !== config.clientKeys.emojis) return res.status(401).json({
 				status: 401,
 				message: 'You are not authorized to do this.',
 			});
@@ -88,7 +94,7 @@ export default class HttpManager {
 					message: 'Invalid JSON.',
 				});
 
-				this.postData = emojis;
+				this.liveIcons = emojis;
 			} catch (error) {
 				return res.status(400).json({
 					status: 400,
@@ -109,10 +115,10 @@ export default class HttpManager {
 			let data = null;
 
 			for await (const guild of client.guilds.cache.values()) {
-				const member = guild.members.cache.get(config.developer) || await guild.members.fetch({ user: config.developer, force: true }).catch(() => null);
+				const member = await guild.members.fetch({ user: config.developerIds[0] }).catch(() => null);
 				if (!member) continue;
 
-				const presence = member.presence || guild.presences.cache.get(config.developer) || await member.fetch(true).then((member) => member.presence) || null;
+				const presence = member.presence || guild.presences.cache.get(config.developerIds[0]) || await member.fetch(true).then((member) => member.presence) || null;
 
 				data = {
 					id: member.user.id,
@@ -149,7 +155,7 @@ export default class HttpManager {
 		});
 
 		this.app.post('/eval', express.json(), async (req, res) => { // Yes, i am aware that this can be potentional security risk.
-			if (req.headers.authorization !== config.keys.eval) return res.status(401).json({
+			if (req.headers.authorization !== config.clientKeys.eval) return res.status(401).json({
 				status: 401,
 				message: 'You are not authorized to do this.',
 			});
@@ -194,129 +200,44 @@ export default class HttpManager {
 		});
 	}
 
-	private async manageStripe(dev?: boolean) {
-		// https://stripe.com/docs/billing/subscriptions/webhooks#state-changes
-		this.app.post((dev ? '/dev/stripe' : '/stripe'), express.raw({ type: 'application/json' }), async (req, res) => {
-			const event = await WssManager.stripeManager?._signWebhook(req.body, req.headers['stripe-signature'], dev);
+	private async manageStripe(dev: boolean) {
+		const baseRoute = dev ? '/dev/stripe' : '/stripe';
+
+		// Webhook Events.
+		this.app.post(`${baseRoute}/luna`, express.raw({ type: 'application/json' }), async (req, res) => {
+			const event = await WssManager.stripeManager?._signWebhook((dev ? 'Luna|Dev' : 'Luna'), req.body, req.headers['stripe-signature']);
 			if (!event?.data) return res.status(400).json({
 				status: 400,
 				message: 'Failed to sign webhook.',
 			});
 
-			const clientId = checkDestination(event, req.headers['Stripe-Account'] as string, dev);
-			if (!clientId) return res.status(400).json({
-				status: 400,
-				message: 'Invalid destination or type. ClientId: ' + clientId + '.',
-			});
-
-			switch (event.type) {
-				case 'checkout.session.completed': {
-					const session: { data: null | Stripe.Checkout.Session, previous: Record<string, string> | null; } = { data: null, previous: null };
-
-					if (typeof event.data.object === 'string') session.data = await WssManager.stripeManager?.getSession(clientId, { sessionId: event.data.object }) || null;
-					else session.data = event.data.object as Stripe.Checkout.Session;
-
-					session.previous = event.data.previous_attributes as Record<string, string> || null;
-
-					if (!session.data) return res.status(400).json({
-						status: 400,
-						message: 'Failed to get session.',
-					});
-
-					if (session.data.subscription) return res.status(200).json({
-						status: 200,
-						message: 'Thanks but no thanks, only one time payments accepted.',
-					});
-
-					if (session.data.payment_status === 'paid' && session.previous?.payment_status !== 'paid') {
-						WssManager.gatewayManager?.send(clientId, 'stripeEvent', session.data, 'oneTimePaid');
-					}
-
-					break;
-				}
-				case 'customer.subscription.updated': {
-					const subscription: { data: null | Stripe.Subscription, previous: Record<string, string> | null; } = { data: null, previous: null };
-
-					if (typeof event.data.object === 'string') subscription.data = await WssManager.stripeManager?.getUserSubscriptions(clientId, { subscriptionId: event.data.object }) || null;
-					else subscription.data = event.data.object as Stripe.Subscription;
-
-					subscription.previous = event.data.previous_attributes as Record<string, string> || null;
-
-					if (!subscription.data) return res.status(400).json({
-						status: 400,
-						message: 'Failed to get subscription.',
-					});
-
-					if (subscription.data.status === 'active' && typeof subscription.previous?.status === 'string' && subscription.previous?.status !== 'active') {
-						WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'started');
-					} else if (!subscription.previous.cancel_at_period_end && subscription.data.cancel_at_period_end) {
-						WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'canceled');
-					} else WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'other');
-
-					break;
-				}
-				case 'customer.subscription.deleted': {
-					const subscription: { data: null | Stripe.Subscription } = { data: null };
-
-					if (typeof event.data.object === 'string') subscription.data = await WssManager.stripeManager?.getUserSubscriptions(clientId, { subscriptionId: event.data.object }) || null;
-					else subscription.data = event.data.object as Stripe.Subscription;
-
-					if (!subscription.data) return res.status(400).json({
-						status: 400,
-						message: 'Failed to get subscription.',
-					});
-
-					WssManager.gatewayManager?.send(clientId, 'stripeEvent', subscription.data, 'ended');
-					break;
-				}
-				case 'invoice.payment_failed': case 'invoice.payment_action_required': {
-					const invoice: { data: null | Stripe.Invoice } = { data: null };
-
-					if (typeof event.data.object === 'string') invoice.data = await WssManager.stripeManager?.getUserInvoices(clientId, { invoiceId: event.data.object }) || null;
-					else invoice.data = event.data.object as Stripe.Invoice;
-
-					if (!invoice.data || !invoice.data?.subscription) return res.status(400).json({
-						status: 400,
-						message: 'Failed to get invoice.',
-					});
-
-					WssManager.gatewayManager?.send(clientId, 'stripeEvent', invoice.data, 'unpaid');
-					break;
-				}
-				default: {
-					WssManager.gatewayManager?.send(clientId, 'stripeEvent', event.data.object, 'other');
-					break;
-				}
-			}
-
-			return res.status(200).json({
-				status: 200,
-				message: 'Successfully signed webhook.',
-			});
+			return await webhookEvents(event, res);
 		});
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/customers', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
-
-			const customers = await WssManager.stripeManager?.getAllCustomers(key);
-			if (!customers) return res.status(400).json({
+		this.app.post(`${baseRoute}/digital`, express.raw({ type: 'application/json' }), async (req, res) => {
+			const event = await WssManager.stripeManager?._signWebhook((dev ? 'Digital|Dev' : 'Digital'), req.body, req.headers['stripe-signature']);
+			if (!event?.data) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch customers.',
+				message: 'Failed to sign webhook.',
 			});
 
-			return res.status(200).json({
-				status: 200,
-				data: customers,
-			});
-		}));
+			return await webhookEvents(event, res);
+		});
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/customers/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		// Customers.
+		this.app.get(baseRoute + '/customers', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const customer = await WssManager.stripeManager?.getCustomer(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.query.create === 'true');
-			if (!customer) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['identify', 'customerId']), hasValues = (stripeCheck === false);
+			if (!stripeCheck) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch customer.',
+				message: 'Malformed body or invalid values, allowed keys are either `email` and `userId` or `customerId`.',
+			});
+
+			const customer = await WssManager.stripeManager?.[hasValues ? 'getCustomer' : 'getAllCustomers'](identify, stripeCheck || {}, req.query.create === 'true');
+			if (Array.isArray(customer) ? !customer.length : !customer) return res.status(400).json({
+				status: 400,
+				message: 'Failed to get customer(s).',
 			});
 
 			return res.status(200).json({
@@ -325,13 +246,67 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/sessions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		this.app.patch(baseRoute + '/customers', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const session = await WssManager.stripeManager?.getSession(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id });
-			if (!session) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['identify', 'customerId']), hasValues = (stripeCheck === false);
+			const stripeCheck2 = ['email', 'metadata'].some((v) => req.body[v]) ? {
+				email: req.body.email,
+				metadata: req.body.metadata || {},
+			} : false;
+
+			if (!stripeCheck || !stripeCheck2 || hasValues) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch session.',
+				message: 'Malformed body or invalid values, required keys are `email` and `userId` or `customerId` and `email`, allowed are `metadata`.',
+			});
+
+			const customer = await WssManager.stripeManager?.updateCustomer(identify, stripeCheck || {}, stripeCheck2);
+			if (!customer) return res.status(400).json({
+				status: 400,
+				message: 'Failed to update customer.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: customer,
+			});
+		}));
+
+		this.app.delete(baseRoute + '/customers', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
+
+			const stripeCheck = checkBody(req.body, ['identify', 'customerId']), hasValues = (stripeCheck === false);
+			if (!stripeCheck || hasValues) return res.status(400).json({
+				status: 400,
+				message: 'Malformed body or invalid values, allowed keys are either `email` and `userId` or `customerId`.',
+			});
+
+			const customer = await WssManager.stripeManager?.deleteCustomer(identify, stripeCheck || {});
+			if (!customer) return res.status(400).json({
+				status: 400,
+				message: 'Failed to delete customer.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: customer,
+			});
+		}));
+
+		// Sessions.
+		this.app.get(baseRoute + '/sessions', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
+
+			const stripeCheck = checkBody(req.body, ['identify', 'sessionId', 'customerId']);
+			if (!stripeCheck) return res.status(400).json({
+				status: 400,
+				message: 'Malformed body or invalid values, allowed keys are either `email` and `userId`, `sessionId` or `customerId`.',
+			});
+
+			const session = await WssManager.stripeManager?.[(stripeCheck.sessionId && Object.keys(stripeCheck).length === 1) ? 'getSession' : 'getUserSessions'](identify, stripeCheck || {});
+			if (Array.isArray(session) ? !session.length : !session) return res.status(400).json({
+				status: 400,
+				message: 'Failed to get session(s).',
 			});
 
 			return res.status(200).json({
@@ -340,138 +315,291 @@ export default class HttpManager {
 			});
 		}));
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/subscriptions', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		// Subscriptions.
+		this.app.get(baseRoute + '/subscriptions', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const subscriptions = await WssManager.stripeManager?.getAllSubscriptions(key);
-			if (!subscriptions) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['identify', 'subscriptionId', 'customerId']), hasValues = (stripeCheck === false);
+			if (!stripeCheck) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch subscriptions.',
+				message: 'Malformed body or invalid values, allowed keys are either `email` and `userId`, `subscriptionId` or `customerId`.',
+			});
+
+			const subscription = await WssManager.stripeManager?.[hasValues ? 'getAllSubscriptions' : (stripeCheck.subscriptionId && Object.keys(stripeCheck).length === 1) ? 'getSubscription' : 'getUserSubscriptions'](identify, stripeCheck || {});
+			if (Array.isArray(subscription) ? !subscription.length : !subscription) return res.status(400).json({
+				status: 400,
+				message: 'Failed to get subscription(s).',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: subscriptions,
+				data: subscription,
 			});
 		}));
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/subscriptions/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		this.app.patch(baseRoute + '/subscriptions', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const subscriptions = await WssManager.stripeManager?.getUserSubscriptions(key, { [req.params.type === 'stripe' ? 'customerId' : req.params.type === 'subscription' ? 'subscriptionId' : 'identify']: req.params.id });
-			if (!subscriptions) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['subscriptionId']), hasValues = (stripeCheck === false);
+			const stripeCheck2 = ['metadata', 'description'].some((v) => req.body[v]) ? {
+				metadata: req.body.metadata || {},
+				description: req.body.description,
+			} : false;
+
+			if (!stripeCheck || !stripeCheck2 || hasValues) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch subscriptions.',
+				message: 'Malformed body or invalid values, required key is `subscriptionId` and either `metadata` or `description`.',
+			});
+
+			const subscription = await WssManager.stripeManager?.updateSubscription(identify, stripeCheck || {}, stripeCheck2);
+			if (!subscription) return res.status(400).json({
+				status: 400,
+				message: 'Failed to update subscription.',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: subscriptions,
+				data: subscription,
 			});
 		}));
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		this.app.delete(baseRoute + '/subscriptions', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const coupons = await WssManager.stripeManager?.managecoupons(key, 'getAll');
-			if (!coupons) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['subscriptionId']);
+			if (!stripeCheck) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch coupons.',
+				message: 'Malformed body or invalid values, allowed key is `subscriptionId`.',
+			});
+
+			const subscription = await WssManager.stripeManager?.deleteSubscription(identify, stripeCheck || {});
+			if (!subscription) return res.status(400).json({
+				status: 400,
+				message: 'Failed to delete subscription.',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: coupons,
+				data: subscription,
 			});
 		}));
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		// Waya Subscription.
+		this.app.post(baseRoute + '/subscriptions/waya', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify || !identify.clientId.includes('Waya')) return;
 
-			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'get', { code: req.params.id }, req.query.create === 'true');
-			if (!cupoun) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['identify', 'customerId']), hasValues = (stripeCheck === false);
+			const stripeCheck2 = ['amount'].every((v) => req.body[v]) ? {
+				amount: req.body.amount,
+				metadata: req.body.metadata || {},
+			} : false;
+
+			if (!stripeCheck || !stripeCheck2 || hasValues) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch cupoun.',
+				message: 'Malformed body or invalid values, required keys are `email` and `userId` or `customerId`, allowed keys are `amount` and `metadata`.',
+			});
+
+			const subscription = await WssManager.stripeManager?.createWayaSubscription(identify, stripeCheck || {}, stripeCheck2);
+			if (!subscription) return res.status(400).json({
+				status: 400,
+				message: 'Failed to create subscription.',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: cupoun,
+				data: subscription,
 			});
 		}));
 
-		this.app.post((dev ? '/dev/stripe' : '/stripe') + '/coupons', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key || !req.body.code || !req.body.percentage || !req.body.duration || !req.body.maxClaims) return;
+		// Invoices.
+		this.app.get(baseRoute + '/invoices', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'create', { code: req.body.code, percentage: req.body.percentage, duration: req.body.duration, maxClaims: req.body.maxClaims });
-			if (!cupoun) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['identify', 'invoiceId', 'customerId']), hasValues = (stripeCheck === false);
+			if (!stripeCheck) return res.status(400).json({
 				status: 400,
-				message: 'Failed to create cupoun.',
+				message: 'Malformed body or invalid values, allowed keys are either `email` and `userId`, `invoiceId` or `customerId`.',
+			});
+
+			const invoice = await WssManager.stripeManager?.[hasValues ? 'getAllInvoices' : (stripeCheck.invoiceId && Object.keys(stripeCheck).length === 1) ? 'getInvoice' : 'getUserInvoices'](identify, stripeCheck || {});
+			if (Array.isArray(invoice) ? !invoice.length : !invoice) return res.status(400).json({
+				status: 400,
+				message: 'Failed to get invoice(s).',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: cupoun,
+				data: invoice,
 			});
 		}));
 
-		this.app.delete((dev ? '/dev/stripe' : '/stripe') + '/coupons/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		this.app.patch(baseRoute + '/invoices', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const cupoun = await WssManager.stripeManager?.managecoupons(key, 'delete', { code: req.params.id });
-			if (!cupoun) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['invoiceId']), hasValues = (stripeCheck === false);
+			const stripeCheck2 = ['metadata', 'description', 'footer'].some((v) => req.body[v]) ? {
+				metadata: req.body.metadata || {},
+				description: req.body.description,
+			} : false;
+
+			if (!stripeCheck || !stripeCheck2 || hasValues) return res.status(400).json({
 				status: 400,
-				message: 'Failed to delete cupoun.',
+				message: 'Malformed body or invalid values, required key is `invoiceId` and allowed are `metadata`, `description` or `footer`.',
+			});
+
+			const invoice = await WssManager.stripeManager?.updateInvoice(identify, stripeCheck || {}, stripeCheck2);
+			if (!invoice) return res.status(400).json({
+				status: 400,
+				message: 'Failed to update invoice.',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: cupoun,
+				data: invoice,
 			});
 		}));
 
-		this.app.get((dev ? '/dev/stripe' : '/stripe') + '/portal/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		this.app.delete(baseRoute + '/invoices', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const portal = await WssManager.stripeManager?.createPortalSession(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id });
-			if (!portal) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['invoiceId']);
+			if (!stripeCheck) return res.status(400).json({
 				status: 400,
-				message: 'Failed to fetch portal.',
+				message: 'Malformed body or invalid values, required key is `invoiceId`.',
+			});
+
+			const invoice = await WssManager.stripeManager?.deleteInvoice(identify, stripeCheck || {});
+			if (!invoice) return res.status(400).json({
+				status: 400,
+				message: 'Failed to delete invoice.',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: portal,
+				data: invoice,
 			});
 		}));
 
-		this.app.post((dev ? '/dev/stripe' : '/stripe') + '/checkout/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		// Coupons.
+		this.app.get(baseRoute + '/coupons', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const checkout = await WssManager.stripeManager?.[key === 'StatusBot' ? 'createStatusSubscription' : 'createWayaSubscription'](dev ? 'Waya|Dev' : 'Waya', { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.body || {});
-			if (!checkout) return res.status(400).json({
+			const stripeCheck = checkBody(req.body, ['couponId']);
+			if (!stripeCheck) return res.status(400).json({
 				status: 400,
-				message: 'Failed to create checkout session.',
+				message: 'Malformed body or invalid values, allowed key is `couponId`.',
+			});
+
+			const coupon = await WssManager.stripeManager?.[stripeCheck.couponId ? 'getCoupon' : 'getAllCoupons'](identify, stripeCheck || {});
+			if (Array.isArray(coupon) ? !coupon.length : !coupon) return res.status(400).json({
+				status: 400,
+				message: 'Failed to get coupon(s).',
 			});
 
 			return res.status(200).json({
 				status: 200,
-				data: checkout,
+				data: coupon,
 			});
 		}));
 
-		this.app.post((dev ? '/dev/stripe' : '/stripe') + '/payment/:type/:id', express.json(), async (req, res) => this.checkKey(req, res, async (key) => {
-			if (!key) return;
+		this.app.post(baseRoute + '/coupons', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
 
-			const payment = await WssManager.stripeManager?.createOneTimePayment(key, { [req.params.type === 'stripe' ? 'customerId' : 'identify']: req.params.id }, req.body || {});
+			const stripeCheck = ['code', 'percentage', 'duration', 'maxClaims'].every((v) => req.body[v]) ? {
+				code: req.body.code,
+				percentage: req.body.percentage,
+				duration: req.body.duration,
+				maxClaims: req.body.maxClaims,
+			} : false;
+
+			if (!stripeCheck) return res.status(400).json({
+				status: 400,
+				message: 'Malformed body or invalid values, allowed keys are `code`, `percentage`, `duration` or `maxClaims`.',
+			});
+
+			const coupon = await WssManager.stripeManager?.createCoupon(identify, stripeCheck || {});
+			if (!coupon) return res.status(400).json({
+				status: 400,
+				message: 'Failed to create coupon.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: coupon,
+			});
+		}));
+
+		this.app.delete(baseRoute + '/coupons', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
+
+			const stripeCheck = checkBody(req.body, ['couponId']), hasValues = (stripeCheck === false);
+			if (!stripeCheck || hasValues) return res.status(400).json({
+				status: 400,
+				message: 'Malformed body or invalid values, required key is `couponId`.',
+			});
+
+			const coupon = await WssManager.stripeManager?.deleteCoupon(identify, stripeCheck || {});
+			if (Array.isArray(coupon) ? !coupon.length : !coupon) return res.status(400).json({
+				status: 400,
+				message: 'Failed to delete coupon.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: coupon,
+			});
+		}));
+
+		// One Time Payment.
+		this.app.post(baseRoute + '/payment', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
+
+			const stripeCheck = checkBody(req.body, ['identify', 'customerId']), hasValues = (stripeCheck === false);
+			const stripeCheck2 = ['amount'].every((v) => req.body[v]) ? {
+				amount: req.body.amount,
+				metadata: req.body.metadata || {},
+			} : false;
+
+			if (!stripeCheck || !stripeCheck2 || hasValues) return res.status(400).json({
+				status: 400,
+				message: 'Malformed body or invalid values, allowed keys are `email` and `userId`, `customerId` or `metadata` and required key is `amount`.',
+			});
+
+			const payment = await WssManager.stripeManager?.createOneTimePayment(identify, stripeCheck || {}, stripeCheck2);
 			if (!payment) return res.status(400).json({
 				status: 400,
-				message: 'Failed to create payment session.',
+				message: 'Failed to create one time payment.',
 			});
 
 			return res.status(200).json({
 				status: 200,
 				data: payment,
+			});
+		}));
+
+		// Customer Portal.
+		this.app.post(baseRoute + '/portal', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
+			if (!identify) return;
+
+			const stripeCheck = checkBody(req.body, ['identify', 'customerId']), hasValues = (stripeCheck === false);
+			const stripeCheck2 = ['intention'].every((v) => req.body[v]) ? {
+				intention: req.body.intention,
+			} : false;
+
+			if (!stripeCheck || !stripeCheck2 || hasValues) return res.status(400).json({
+				status: 400,
+				message: 'Malformed body or invalid values, allowed keys are `email` and `userId`, `customerId` or `intention`.',
+			});
+
+			const portal = await WssManager.stripeManager?.createPortalSession(identify, stripeCheck || {}, stripeCheck2.intention);
+			if (!portal) return res.status(400).json({
+				status: 400,
+				message: 'Failed to create portal session.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: portal,
 			});
 		}));
 	}
