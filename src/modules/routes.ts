@@ -135,20 +135,23 @@ export default class HttpManager {
 
 	private async mainWebsite() {
 		this.app.get('/digital', express.json(), async (req, res) => {
-			const member = await (await WssManager.guilds.fetch('870281239645528085').catch(() => null))?.members.fetch({ user: '797012765352001557', withPresences: true }).catch(() => null);
+			const guild = await WssManager.guilds.fetch('870281239645528085').catch(() => null);
+			const member = await guild?.members.fetch({ user: '797012765352001557', withPresences: true }).catch(() => null);
+
+			guild?.presences.cache.map((v) => console.log(v.userId));
 
 			return res.status(200).json({
 				status: 200,
-				content: member ? {
+				data: member ? {
 					id: member.user.id,
 					bio: 'Hey there, I\'m Digital. I\'m a student from Croatia pursuing full-stack development and software engineering.\n\nI enjoy leveraging technologies such as TypeScript, Next.js, C++, MongoDB, and many others to create scalable and performant applications, and I\'m looking for projects to develop and things to learn in order to expand my knowledge and skillset further.',
-					username: member.user.username,
+					username: member.user.username?.replaceAll('The ', ''),
 					accentColor: member.user.accentColor,
 					discriminator: member.user.discriminator,
 					createdTimestamp: member.user.createdTimestamp,
 					avatar: member.user.displayAvatarURL({ size: 2048 }) || null,
 					activities: member.presence?.activities?.length ? formatActivities(member.presence?.activities) : [],
-					banner: member.user.banner ? member.user.bannerURL({ size: 4096 }) : (await member.user.fetch(true)).banner || null,
+					banner: member.user.banner ? member.user.bannerURL({ size: 4096 }) : (await member.user.fetch(true)).bannerURL({ size: 4096 }) || null,
 				} : null,
 			});
 		});

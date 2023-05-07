@@ -42,7 +42,7 @@ const WssManager: CustomClient = new Client({
 		BaseGuildEmojiManager: 0,
 		GuildEmojiManager: 0,
 		GuildMemberManager: {
-			maxSize: 0,
+			maxSize: 1, // change this (https://github.com/discordjs/discord.js/pull/9534)
 			keepOverLimit: (member) => config.developerIds.some((id) => member.id === id),
 		},
 		GuildBanManager: 0,
@@ -53,7 +53,7 @@ const WssManager: CustomClient = new Client({
 		GuildTextThreadManager: 0,
 		MessageManager: 0,
 		PresenceManager: {
-			maxSize: 0,
+			maxSize: 1,
 			keepOverLimit: (presence) => config.developerIds.some((id) => presence.userId === id),
 		},
 		ReactionManager: 0,
