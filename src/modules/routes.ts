@@ -6,6 +6,7 @@ import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
 import config from '../data/config';
 import LoggerModule from './logger';
+import cors from 'cors';
 
 export default class HttpManager {
 	private app: express.Application;
@@ -14,6 +15,11 @@ export default class HttpManager {
 	constructor() {
 		this.app = express();
 		this.liveIcons = {};
+
+		this.app.use(cors({
+			origin: '*',
+			methods: ['POST', 'GET', 'PATCH', 'DELETE'],
+		}));
 
 		this.app.get('/', express.json(), (req, res) => {
 			res.status(200).json({
@@ -164,12 +170,14 @@ export default class HttpManager {
 		});
 
 		this.app.post('/donate', express.json(), async (req, res) => {
+			console.log(req.body);
 			if (!req.body.amount) return res.status(400).json({
 				status: 400,
 				message: 'Missing required body key `amount`.',
 			});
 
 			const payment = await WssManager.stripeManager?.createOneTimePayment({ account: 'Digital', clientId: 'StatusBot' }, {}, { amount: req.body.amount });
+			console.log(payment);
 			if (!payment) return res.status(400).json({
 				status: 400,
 				message: 'Failed to create one time payment.',
