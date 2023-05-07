@@ -148,6 +148,7 @@ export default class HttpManager {
 					username: member.user.username?.replaceAll('The ', ''),
 					accentColor: member.user.accentColor,
 					discriminator: member.user.discriminator,
+					status: member.presence?.status || 'offline',
 					createdTimestamp: member.user.createdTimestamp,
 					avatar: member.user.displayAvatarURL({ size: 2048 }) || null,
 					activities: member.presence?.activities?.length ? formatActivities(member.presence?.activities) : [],
