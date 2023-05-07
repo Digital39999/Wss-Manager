@@ -6,6 +6,7 @@ import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
 import config from '../data/config';
 import LoggerModule from './logger';
+import cors from 'cors';
 
 export default class HttpManager {
 	private app: express.Application;
@@ -14,15 +15,7 @@ export default class HttpManager {
 	constructor() {
 		this.app = express();
 		this.liveIcons = {};
-
-		this.app.use((req, res, next) => {
-			res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-			res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-			res.setHeader('Access-Control-Allow-Credentials', 'true');
-			res.setHeader('Access-Control-Allow-Origin', '*');
-
-			next();
-		});
+		this.app.use(cors());
 
 		this.app.get('/', express.json(), (req, res) => {
 			res.status(200).json({
@@ -84,8 +77,6 @@ export default class HttpManager {
 					message: 'Too many requests, please try again in ' + formatTime(rate.msBeforeNext, true) + '.',
 				});
 			});
-
-			next();
 		});
 	}
 
@@ -239,8 +230,15 @@ export default class HttpManager {
 	}
 
 	private async loadInternal() {
+		this.app.options('*', express.json(), (req, res) => {
+			return res.status(200).json({
+				status: 200,
+				message: 'This endpoint does not exist.',
+			});
+		});
+
 		this.app.all('*', express.json(), (req, res) => {
-			res.status(404).json({
+			return res.status(404).json({
 				status: 404,
 				message: 'This endpoint does not exist.',
 			});
