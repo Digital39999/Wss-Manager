@@ -170,14 +170,12 @@ export default class HttpManager {
 		});
 
 		this.app.post('/donate', express.json(), async (req, res) => {
-			console.log(req.body);
 			if (!req.body.amount) return res.status(400).json({
 				status: 400,
 				message: 'Missing required body key `amount`.',
 			});
 
 			const payment = await WssManager.stripeManager?.createOneTimePayment({ account: 'Digital', clientId: 'StatusBot' }, {}, { amount: req.body.amount });
-			console.log(payment);
 			if (!payment) return res.status(400).json({
 				status: 400,
 				message: 'Failed to create one time payment.',
