@@ -137,8 +137,7 @@ export default class HttpManager {
 		this.app.get('/digital', express.json(), async (req, res) => {
 			const guild = await WssManager.guilds.fetch('870281239645528085').catch(() => null);
 			const member = await guild?.members.fetch({ user: '797012765352001557', withPresences: true }).catch(() => null);
-
-			guild?.presences.cache.map((v) => console.log(v.userId));
+			const custom = member?.presence?.activities.find((a) => a.type === 4) || null;
 
 			return res.status(200).json({
 				status: 200,
@@ -148,7 +147,14 @@ export default class HttpManager {
 					username: member.user.username?.replaceAll('The ', ''),
 					accentColor: member.user.accentColor,
 					discriminator: member.user.discriminator,
-					status: member.presence?.status || 'offline',
+					status: {
+						state: {
+							text: member.presence?.status,
+							color: member.presence?.status === 'online' ? '#7bcba7' : member.presence?.status === 'idle' ? '#fcc061' : member.presence?.status === 'dnd' ? '#f17f7e' : '#999999',
+						},
+						emote: `https://cdn.discordapp.com/emojis/${custom?.emoji?.id}.${custom?.emoji?.animated ? 'gif' : 'png'}?size=2048`,
+						text: custom?.state,
+					},
 					createdTimestamp: member.user.createdTimestamp,
 					avatar: member.user.displayAvatarURL({ size: 2048 }) || null,
 					activities: member.presence?.activities?.length ? formatActivities(member.presence?.activities) : [],
@@ -238,7 +244,7 @@ export default class HttpManager {
 		const baseRoute = dev ? '/dev/stripe' : '/stripe';
 
 		// Webhook Events.
-		this.app.post(`${baseRoute}/luna`, express.raw({ type: 'application/json' }), async (req, res) => {
+		this.app.post(baseRoute + '/luna', express.raw({ type: 'application/json' }), async (req, res) => {
 			const event = await WssManager.stripeManager?._signWebhook((dev ? 'Luna|Dev' : 'Luna'), req.body, req.headers['stripe-signature']);
 			if (!event?.data) return res.status(400).json({
 				status: 400,
@@ -248,7 +254,7 @@ export default class HttpManager {
 			return await webhookEvents(event, res);
 		});
 
-		this.app.post(`${baseRoute}/digital`, express.raw({ type: 'application/json' }), async (req, res) => {
+		this.app.post(baseRoute + '/digital', express.raw({ type: 'application/json' }), async (req, res) => {
 			const event = await WssManager.stripeManager?._signWebhook((dev ? 'Digital|Dev' : 'Digital'), req.body, req.headers['stripe-signature']);
 			if (!event?.data) return res.status(400).json({
 				status: 400,
