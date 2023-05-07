@@ -71,6 +71,7 @@ const WssManager: CustomClient = new Client({
 WssManager.httpManager = new HttpManager();
 WssManager.stripeManager = new StripeManager();
 WssManager.gatewayManager = new GatewayManager();
+
 WssManager.localDataBase = new LocalDataBase();
 
 /* ----------------------------------- Utils ----------------------------------- */

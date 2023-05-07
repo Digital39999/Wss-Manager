@@ -1,4 +1,5 @@
-import { checkBody, formatActivities, getClientFromKey, webhookEvents } from './utils';
+import { checkBody, formatActivities, getClientFromKey, webhookEvents, getClientIdentifier, formatTime } from './utils';
+import { RateLimiterMemory, BurstyRateLimiter, RateLimiterRes } from 'rate-limiter-flexible';
 import { GatewayIdentifications, ParsedStripeUsers } from '../data/types';
 import express, { Request, Response } from 'express';
 import WssManager, { evalExecute } from '../index';
@@ -21,6 +22,7 @@ export default class HttpManager {
 			});
 		});
 
+		this.loadRateLimits();
 		this.loadRoutes();
 	}
 
@@ -54,10 +56,32 @@ export default class HttpManager {
 		});
 	}
 
+	private async loadRateLimits() {
+		const burstyLimiter = new BurstyRateLimiter(
+			new RateLimiterMemory({ points: 2, duration: 1 }), // 2 requests per 1 second
+			new RateLimiterMemory({ keyPrefix: 'burst', points: 5, duration: 10 }), // 5 requests per 10 seconds
+		);
+
+		this.app.use((req, res, next) => {
+			const identifier = getClientIdentifier(req);
+			if (!identifier) return res.status(431).send({ status: 431, message: 'No identifier found.' });
+
+			burstyLimiter.consume(identifier).then(() => next()).catch((rate: RateLimiterRes) => {
+				res.set('X-RateLimit-Reset', rate.msBeforeNext.toString());
+				res.set('Retry-After', String(rate.msBeforeNext / 1000));
+
+				res.status(429).send({
+					status: 429,
+					message: 'Too many requests, please try again in ' + formatTime(rate.msBeforeNext, true) + '.',
+				});
+			});
+		});
+	}
+
 	private async loadRoutes() {
 		await this.loadEmojis();
+		await this.mainWebsite();
 		await this.evalEndpoint();
-		await this.websiteStatus();
 
 		await this.manageStripe(true);
 		await this.manageStripe(false);
@@ -109,37 +133,43 @@ export default class HttpManager {
 		});
 	}
 
-	private async websiteStatus() {
+	private async mainWebsite() {
 		this.app.get('/digital', express.json(), async (req, res) => {
-			const client = await import('../index').then((module) => module.default);
-			let data = null;
-
-			for await (const guild of client.guilds.cache.values()) {
-				const member = await guild.members.fetch({ user: config.developerIds[0] }).catch(() => null);
-				if (!member) continue;
-
-				const presence = member.presence || guild.presences.cache.get(config.developerIds[0]) || await member.fetch(true).then((member) => member.presence) || null;
-
-				data = {
-					id: member.user.id,
-					username: member.user.username,
-					discriminator: member.user.discriminator,
-					nickname: member.nickname,
-					nickavatar: member.displayAvatarURL({ size: 2048 }) || null,
-					status: presence?.status || 'offline',
-					activities: presence?.activities?.length ? formatActivities(presence.activities) : [],
-					createdTimestamp: member.user.createdTimestamp,
-					avatar: member.user.displayAvatarURL({ size: 2048 }) || null,
-					banner: member.user.bannerURL({ size: 2048 }) || null,
-					accentColor: member.user.accentColor,
-				};
-
-				break;
-			}
+			const member = await (await WssManager.guilds.fetch('870281239645528085').catch(() => null))?.members.fetch({ user: '797012765352001557', withPresences: true }).catch(() => null);
 
 			return res.status(200).json({
 				status: 200,
-				content: data || null,
+				content: member ? {
+					id: member.user.id,
+					bio: 'Hey there, I\'m Digital. I\'m a student from Croatia pursuing full-stack development and software engineering.\n\nI enjoy leveraging technologies such as TypeScript, Next.js, C++, MongoDB, and many others to create scalable and performant applications, and I\'m looking for projects to develop and things to learn in order to expand my knowledge and skillset further.',
+					username: member.user.username,
+					accentColor: member.user.accentColor,
+					discriminator: member.user.discriminator,
+					createdTimestamp: member.user.createdTimestamp,
+					avatar: member.user.displayAvatarURL({ size: 2048 }) || null,
+					activities: member.presence?.activities?.length ? formatActivities(member.presence?.activities) : [],
+					banner: member.user.banner ? member.user.bannerURL({ size: 4096 }) : (await member.user.fetch(true)).banner || null,
+				} : null,
+			});
+		});
+
+		this.app.post('/donate', express.json(), async (req, res) => {
+			if (!req.body.amount) return res.status(400).json({
+				status: 400,
+				message: 'Missing required body key `amount`.',
+			});
+
+			const payment = await WssManager.stripeManager?.createOneTimePayment({ account: 'Digital', clientId: 'StatusBot' }, {}, { amount: req.body.amount });
+			if (!payment) return res.status(400).json({
+				status: 400,
+				message: 'Failed to create one time payment.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: {
+					url: payment?.url,
+				},
 			});
 		});
 	}

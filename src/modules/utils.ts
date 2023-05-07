@@ -1,5 +1,5 @@
-import { Message, APIEmbed, EmbedType, Activity } from 'discord.js';
 import { GatewayIdentifications, ParsedStripeUsers } from '../data/types';
+import { Message, APIEmbed, EmbedType, Activity } from 'discord.js';
 import { Response, Request } from 'express';
 import config from '../data/config';
 import WssManager from '../index';
@@ -61,6 +61,8 @@ export function formatActivities(activities: Activity[]) {
 			},
 		},
 	});
+
+	return newActivities;
 }
 
 export function getClientFromKey(input: string, isDev?: boolean): { account: ParsedStripeUsers | null, clientId: GatewayIdentifications } | null {
@@ -216,3 +218,43 @@ export function checkBody<T extends ('identify' | `${('customer' | 'subscription
 
 	return (checks[4] ? { identify: data.userId + '|' + data.email } : data) as Record<T, string>;
 }
+
+export function getClientIdentifier(req: Request): string | null {
+	let identifier = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket.remoteAddress;
+
+	if (typeof identifier === 'string') {
+		if (identifier.indexOf(':') !== -1) identifier = identifier.split(':').pop();
+		if (identifier?.includes(',')) identifier = identifier?.split(',')[0];
+	}
+
+	for (const possibleIdentifier of [req.headers['user-agent'], req.headers['accept-language']]) {
+		if (possibleIdentifier) {
+			identifier = possibleIdentifier; break;
+		}
+	}
+
+	return (Array.isArray(identifier) ? identifier[0] : identifier) || req.ip || null;
+}
+
+export function formatTime(milliseconds: number, shortOutput: boolean): string {
+	const units: [number, string][] = [
+		[86400000, shortOutput ? 'd' : 'day'],
+		[3600000, shortOutput ? 'h' : 'hour'],
+		[60000, shortOutput ? 'm' : 'minute'],
+		[1000, shortOutput ? 's' : 'second'],
+		[1, shortOutput ? 'ms' : 'millisecond'],
+	];
+
+	const parts = [];
+
+	for (const [divisor, unit] of units) {
+		const value = Math.floor(milliseconds / divisor);
+		if (value > 0) {
+			parts.push(`${value}${unit + (value === 1 ? 's' : '')}`);
+			milliseconds -= value * divisor;
+		}
+	}
+
+	return parts.length > 0 ? parts.join(' ') : '0' + (shortOutput ? 'ms' : ' milliseconds');
+}
+
