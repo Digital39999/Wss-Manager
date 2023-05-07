@@ -6,7 +6,6 @@ import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
 import config from '../data/config';
 import LoggerModule from './logger';
-import cors from 'cors';
 
 export default class HttpManager {
 	private app: express.Application;
@@ -16,10 +15,14 @@ export default class HttpManager {
 		this.app = express();
 		this.liveIcons = {};
 
-		this.app.use(cors({
-			origin: '*',
-			methods: ['POST', 'GET', 'PATCH', 'DELETE'],
-		}));
+		this.app.use((req, res, next) => {
+			res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+			res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+			res.setHeader('Access-Control-Allow-Credentials', 'true');
+			res.setHeader('Access-Control-Allow-Origin', '*');
+
+			next();
+		});
 
 		this.app.get('/', express.json(), (req, res) => {
 			res.status(200).json({
@@ -81,6 +84,8 @@ export default class HttpManager {
 					message: 'Too many requests, please try again in ' + formatTime(rate.msBeforeNext, true) + '.',
 				});
 			});
+
+			next();
 		});
 	}
 
