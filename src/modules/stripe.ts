@@ -48,7 +48,7 @@ export default class StripeManager {
 	}
 
 	// Customers.
-	public async getCustomer(who: Who, options: { identify?: string; customerId?: string; }, createOnFail?: boolean): Promise<Stripe.Customer | null> {
+	public async getCustomer(who: Who, options: { identify?: string; customerId?: string; }, other?: { customerName?: string; }, createOnFail?: boolean): Promise<Stripe.Customer | null> {
 		if (!options.identify && !options.customerId) return null;
 
 		let customer: Stripe.Customer | null;
@@ -62,6 +62,7 @@ export default class StripeManager {
 			const idAndEmail = this._convertUser(options.identify);
 
 			customer = await this.getAccount(who.account)?.customers.create({
+				name: other?.customerName,
 				email: idAndEmail.email,
 				metadata: {
 					userId: idAndEmail.userId,
@@ -153,8 +154,8 @@ export default class StripeManager {
 	}
 
 	// Waya Subscription.
-	public async createWayaSubscription(who: Who, options: { identify?: string; customerId?: string; }, data: { amount?: number; metadata?: Record<string, string | number>; }): Promise<Stripe.Checkout.Session | null> {
-		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, true);
+	public async createWayaSubscription(who: Who, options: { identify?: string; customerId?: string; }, data: { amount?: number; metadata?: Record<string, string | number>; customerName?: string; }): Promise<Stripe.Checkout.Session | null> {
+		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, { customerName: data.customerName }, true);
 		if (!customer) return null;
 
 		return await this.getAccount(who.account)?.checkout.sessions.create({
@@ -186,6 +187,7 @@ export default class StripeManager {
 			subscription_data: {
 				metadata: {
 					...(typeof data?.metadata === 'object' ? data?.metadata : {}),
+					userId: customer.metadata.userId,
 					_clientId: who.clientId,
 				},
 			},
@@ -264,7 +266,7 @@ export default class StripeManager {
 	}
 
 	// One Time Payment.
-	public async createOneTimePayment(who: Who, options: { identify?: string; customerId?: string; }, data?: { amount: number; metadata?: Record<string, string | number>; }): Promise<Stripe.Checkout.Session | null> {
+	public async createOneTimePayment(who: Who, options: { identify?: string; customerId?: string; }, data?: { amount: number; metadata?: Record<string, string | number>; customerName?: string; }): Promise<Stripe.Checkout.Session | null> {
 		if (typeof data?.amount !== 'number') return null;
 
 		const defaultPaymentOptions: Stripe.Checkout.SessionCreateParams = {
@@ -290,7 +292,7 @@ export default class StripeManager {
 
 		if (!options.identify && !options.customerId) return await this.getAccount(who.account)?.checkout.sessions.create(defaultPaymentOptions) || null;
 		else {
-			const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, true);
+			const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, { customerName: data.customerName }, true);
 			if (!customer) return null;
 
 			return await this.getAccount(who.account)?.checkout.sessions.create({

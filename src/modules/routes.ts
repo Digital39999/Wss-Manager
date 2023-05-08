@@ -154,7 +154,7 @@ export default class HttpManager {
 							text: member.presence?.status,
 							color: member.presence?.status === 'online' ? '#7bcba7' : member.presence?.status === 'idle' ? '#fcc061' : member.presence?.status === 'dnd' ? '#f17f7e' : '#999999',
 						},
-						emote: `https://cdn.discordapp.com/emojis/${custom?.emoji?.id}.${custom?.emoji?.animated ? 'gif' : 'png'}?size=2048`,
+						emote: custom?.emoji?.id ? `https://cdn.discordapp.com/emojis/${custom?.emoji?.id}.${custom?.emoji?.animated ? 'gif' : 'png'}?size=2048` : null,
 						text: custom?.state,
 					},
 					createdTimestamp: member.user.createdTimestamp,
@@ -283,7 +283,7 @@ export default class HttpManager {
 				message: 'Malformed body or invalid values, allowed keys are either `email` and `userId` or `customerId`.',
 			});
 
-			const customer = await WssManager.stripeManager?.[hasValues ? 'getCustomer' : 'getAllCustomers'](identify, stripeCheck || {}, req.query.create === 'true');
+			const customer = await WssManager.stripeManager?.[hasValues ? 'getCustomer' : 'getAllCustomers'](identify, stripeCheck || {}, { customerName: req.body?.name }, req.query.create === 'true');
 			if (Array.isArray(customer) ? !customer.length : !customer) return res.status(400).json({
 				status: 400,
 				message: 'Failed to get customer(s).',
