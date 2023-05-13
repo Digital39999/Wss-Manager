@@ -191,32 +191,37 @@ export async function webhookEvents(event: Stripe.Event, res: Response): Promise
 	});
 }
 
-// lol
-export function checkBody<T extends ('identify' | `${('customer' | 'subscription' | 'session' | 'coupon' | 'invoice')}Id`)>(body: Request['body'], keys: T[]): Partial<Record<T, string>> | false | null {
+
+type ValidKeys = 'userId' | 'email' | Idable | Coupon;
+type Coupon = 'code' | 'percentage' | 'duration' | 'maxClaims';
+type Idable = `${('customer' | 'subscription' | 'session' | 'coupon' | 'invoice')}Id`;
+type Body<T extends PropertyKey, U extends string> = { required: Record<T, string>, optional: Record<U, string> } | false | null;
+
+export function checkBody<T extends ValidKeys, U extends string>(body: Request['body'], required?: T[], optional?: U[]) : Body<T, U> {
 	if (!body || Object.keys(body).length === 0) return false;
 
-	type Keys = Exclude<T, 'identify'> | 'email' | 'userId';
+	const optionalOutput = {} as { [x in U]: string };
+	const requiredOutput = {} as { [K in ValidKeys]: string };
 
-	const modifiedKeys = keys.map((k) => {
-		if (k === 'identify') return ['email', 'userId']; return k;
-	}).flat() as Keys[];
+	if (!required?.some((k) => body?.[k as keyof typeof body])) return null;
 
-	const data: Partial<Record<Keys, string>> = {};
-	if (!modifiedKeys.some((k) => body?.[k as keyof typeof body])) return null;
+	for (const key of required) {
+		if (body[key] !== undefined) requiredOutput[key] = body[key];
+	}
 
-	modifiedKeys.map((k) => { if (body[k]) data[k] = body[k]; });
+	for (const key of optional || []) {
+		if (body[key] !== undefined) optionalOutput[key] = body[key];
+	}
 
 	const checks = {
-		1: (Object.keys(data).length > 1 && (!data.email && !data.userId)),
-		2: (Object.keys(data).length === 1 && (data.email || data.userId)),
-		3: (Object.keys(data).length > 1 && ((data.email && !data.userId) || (!data.email && data.userId))),
-		4: data.userId && data.email,
+		1: (Object.keys(requiredOutput).length > 2 && (!body.email || !body.userId)),
+		2: (Object.keys(requiredOutput).length === 1 && (body.email || body.userId)),
 	};
 
-	if (checks[1] || checks[2] || checks[3]) return null;
-	if (!data.userId?.match(/^[0-9]{17,19}$/) || !data.email?.match(/^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/)) return null;
+	if (checks[1] || checks[2]) return null;
+	if (!requiredOutput.userId?.match(/^[0-9]{17,19}$/) || !requiredOutput.email?.match(/^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/)) return null;
 
-	return (checks[4] ? { identify: data.userId + '|' + data.email } : data) as Record<T, string>;
+	return { required: requiredOutput, optional: optionalOutput };
 }
 
 export function getClientIdentifier(req: Request): string | null {

@@ -3,6 +3,8 @@ import LoggerModule from './logger';
 import config from '../data/config';
 import Stripe from 'stripe';
 
+type UserData = { userId: string; email: string; };
+
 export default class StripeManager {
 	public users: Map<StripeUsers, {
 		dev: Stripe; prod: Stripe;
@@ -20,13 +22,6 @@ export default class StripeManager {
 				prod: new Stripe(config.stripe[user as StripeUsers].keys.prod, { apiVersion: '2022-11-15' }),
 			});
 		}
-	}
-
-	private _convertUser(identify: string) {
-		return {
-			userId: identify.split('|')[0],
-			email: identify.split('|')[1],
-		};
 	}
 
 	public async _signWebhook(who: ParsedStripeUsers, body: Buffer, header?: string | string[]) {
@@ -48,28 +43,36 @@ export default class StripeManager {
 	}
 
 	// Customers.
-	public async getCustomer(who: Who, options: { identify?: string; customerId?: string; }, other?: { customerName?: string; }, createOnFail?: boolean): Promise<Stripe.Customer | null> {
-		if (!options.identify && !options.customerId) return null;
+	public async createCustomer(who: Who, options: UserData, data?: { name?: string; metadata?: Record<string, string>; }): Promise<Stripe.Customer | null> {
+		const customer = await this.getAccount(who.account)?.customers.create({
+			name: data?.name,
+			email: options.email,
+			metadata: {
+				...(typeof data?.metadata === 'object' ? data?.metadata : {}),
+				userId: options.userId,
+				_clientId: who.clientId,
+			},
+		}) || null;
+
+		return customer;
+	}
+
+	public async getCustomer(who: Who, options: UserData & { customerId?: string; }, data?: { name?: string; metadata?: Record<string, string>; }, createOnFail?: boolean): Promise<Stripe.Customer | null> {
+		if ((!options.email ||!options.userId) && !options.customerId) return null;
 
 		let customer: Stripe.Customer | null;
-		if (options.identify) {
-			const idAndEmail = this._convertUser(options.identify);
+		if (options.email && options.userId) customer = (await this.getAccount(who.account)?.customers.list({ email: options.email }))?.data[0] || null;
+		else customer = await this.getAccount(who.account)?.customers.retrieve(options.customerId || '').catch(() => null) as Stripe.Customer;
 
-			customer = (await this.getAccount(who.account)?.customers.list({ email: idAndEmail.email }))?.data[0] || null;
-		} else customer = await this.getAccount(who.account)?.customers.retrieve(options.customerId || '').catch(() => null) as Stripe.Customer;
-
-		if (!customer && createOnFail && options.identify) {
-			const idAndEmail = this._convertUser(options.identify);
-
-			customer = await this.getAccount(who.account)?.customers.create({
-				name: other?.customerName,
-				email: idAndEmail.email,
-				metadata: {
-					userId: idAndEmail.userId,
-					_clientId: who.clientId,
-				},
-			}) || null;
-		}
+		if (!customer && createOnFail && options.email && options.userId) customer = await this.getAccount(who.account)?.customers.create({
+			name: data?.name,
+			email: options.email,
+			metadata: {
+				...(typeof data?.metadata === 'object' ? data?.metadata : {}),
+				userId: options.userId,
+				_clientId: who.clientId,
+			},
+		}) || null;
 
 		return customer;
 	}
@@ -78,8 +81,8 @@ export default class StripeManager {
 		return (await this.getAccount(who.account)?.customers.list())?.data || null;
 	}
 
-	public async updateCustomer(who: Who, options: { identify?: string; customerId?: string; }, data: { email?: string; metadata?: Record<string, string | number>; }): Promise<Stripe.Customer | null> {
-		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId });
+	public async updateCustomer(who: Who, options: UserData & { customerId?: string; }, data: { email?: string; name?: string; metadata?: Record<string, string>; }): Promise<Stripe.Customer | null> {
+		const customer = await this.getCustomer(who, options);
 		if (!customer) return null;
 
 		return await this.getAccount(who.account)?.customers.update(customer.id, {
@@ -92,8 +95,8 @@ export default class StripeManager {
 		}) || null;
 	}
 
-	public async deleteCustomer(who: Who, options: { identify?: string; customerId?: string; }): Promise<Stripe.DeletedCustomer | null> {
-		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId });
+	public async deleteCustomer(who: Who, options: UserData & { customerId?: string; }): Promise<Stripe.DeletedCustomer | null> {
+		const customer = await this.getCustomer(who, options);
 		if (!customer) return null;
 
 		return await this.getAccount(who.account)?.customers.del(customer.id) || null;
@@ -106,10 +109,10 @@ export default class StripeManager {
 		return await this.getAccount(who.account)?.checkout.sessions.retrieve(options.sessionId) || null;
 	}
 
-	public async getUserSessions(who: Who, options: { identify?: string; customerId?: string; }): Promise<Stripe.Checkout.Session[] | null> {
-		if (!options.identify && !options.customerId) return null;
+	public async getUserSessions(who: Who, options: UserData & { customerId?: string; }): Promise<Stripe.Checkout.Session[] | null> {
+		if ((!options.email ||!options.userId) && !options.customerId) return null;
 
-		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId });
+		const customer = await this.getCustomer(who, options);
 		if (!customer) return null;
 
 		return (await this.getAccount(who.account)?.checkout.sessions.list({ customer: customer.id }))?.data || null;
@@ -122,10 +125,10 @@ export default class StripeManager {
 		return await this.getAccount(who.account)?.subscriptions.retrieve(options.subscriptionId) || null;
 	}
 
-	public async getUserSubscriptions(who: Who, options?: { identify?: string; customerId?: string; }): Promise<Stripe.Subscription[] | null> {
-		if (!options?.identify && !options?.customerId) return null;
+	public async getUserSubscriptions(who: Who, options: UserData & { customerId?: string; }): Promise<Stripe.Subscription[] | null> {
+		if ((!options.email ||!options.userId) && !options.customerId) return null;
 
-		const customer = await this.getCustomer(who, { identify: options?.identify, customerId: options?.customerId });
+		const customer = await this.getCustomer(who, options);
 		if (!customer) return null;
 
 		return (await this.getAccount(who.account)?.subscriptions.list({ customer: customer.id }))?.data || null;
@@ -135,7 +138,7 @@ export default class StripeManager {
 		return (await this.getAccount(who.account)?.subscriptions.list())?.data || null;
 	}
 
-	public async updateSubscription(who: Who, options: { subscriptionId?: string; }, data: { description?: string; metadata?: Record<string, string | number>; }): Promise<Stripe.Subscription | null> {
+	public async updateSubscription(who: Who, options: { subscriptionId?: string; }, data: { description?: string; metadata?: Record<string, string>; }): Promise<Stripe.Subscription | null> {
 		if (!options.subscriptionId) return null;
 
 		return await this.getAccount(who.account)?.subscriptions.update(options.subscriptionId, {
@@ -154,8 +157,8 @@ export default class StripeManager {
 	}
 
 	// Waya Subscription.
-	public async createWayaSubscription(who: Who, options: { identify?: string; customerId?: string; }, data: { amount?: number; metadata?: Record<string, string | number>; customerName?: string; }): Promise<Stripe.Checkout.Session | null> {
-		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, { customerName: data.customerName }, true);
+	public async createWayaSubscription(who: Who, options: UserData & { customerId?: string; }, data: { amount?: string; metadata?: Record<string, string>; name?: string; }): Promise<Stripe.Checkout.Session | null> {
+		const customer = await this.getCustomer(who, options, { name: data.name }, true);
 		if (!customer) return null;
 
 		return await this.getAccount(who.account)?.checkout.sessions.create({
@@ -177,7 +180,7 @@ export default class StripeManager {
 					product_data: {
 						name: 'Waya Subscription',
 					},
-					unit_amount: typeof data?.amount === 'number' ? Math.round((data.amount || 0) * 100) || 300 : 300,
+					unit_amount: data?.amount && typeof parseFloat(data?.amount) === 'number' ? Math.round((Number(data.amount) || 0) * 100) || 300 : 300,
 					recurring: {
 						interval: 'month',
 						interval_count: 1,
@@ -205,15 +208,15 @@ export default class StripeManager {
 		return (await this.getAccount(who.account)?.coupons.list())?.data || null;
 	}
 
-	public async createCoupon(who: Who, options: { code: string; percentage: number; duration: ('forever' | 'once' | 'repeating'); maxClaims: number; metadata?: Record<string, string | number>; }): Promise<Stripe.Coupon | null> {
+	public async createCoupon(who: Who, options: { code: string; percentage: string; duration: ('forever' | 'once' | 'repeating'); maxClaims: string; metadata?: Record<string, string>; }): Promise<Stripe.Coupon | null> {
 		const check = (await this.getAccount(who.account)?.coupons.list())?.data?.find((cupounData) => (cupounData.name === options.code || cupounData.id === options.code)) || null;
 		if (check) return null;
 
 		return await this.getAccount(who.account)?.coupons.create({
 			name: options.code,
-			percent_off: options.percentage,
+			percent_off: Number(options.percentage),
 			duration: options.duration || 'once',
-			max_redemptions: options.maxClaims,
+			max_redemptions: Number(options.maxClaims),
 			metadata: {
 				...(typeof options.metadata === 'object' ? options.metadata : {}),
 				_clientId: who.clientId,
@@ -234,10 +237,10 @@ export default class StripeManager {
 		return await this.getAccount(who.account)?.invoices.retrieve(options.invoiceId) || null;
 	}
 
-	public async getUserInvoices(who: Who, options: { identify?: string; customerId?: string; }): Promise<Stripe.Invoice[] | null> {
-		if (!options.identify && !options.customerId) return null;
+	public async getUserInvoices(who: Who, options: UserData & { customerId?: string; }): Promise<Stripe.Invoice[] | null> {
+		if ((!options.email ||!options.userId) && !options.customerId) return null;
 
-		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId });
+		const customer = await this.getCustomer(who, options);
 		if (!customer) return null;
 
 		return (await this.getAccount(who.account)?.invoices.list({ customer: customer.id }))?.data || null;
@@ -247,7 +250,7 @@ export default class StripeManager {
 		return (await this.getAccount(who.account)?.invoices.list())?.data || null;
 	}
 
-	public async updateInvoice(who: Who, options: { invoiceId?: string; }, data: { description?: string; footer?: string; metadata?: Record<string, string | number>; }): Promise<Stripe.Invoice | null> {
+	public async updateInvoice(who: Who, options: { invoiceId?: string; }, data: { description?: string; footer?: string; metadata?: Record<string, string>; }): Promise<Stripe.Invoice | null> {
 		if (!options.invoiceId) return null;
 
 		return await this.getAccount(who.account)?.invoices.update(options.invoiceId, {
@@ -266,8 +269,8 @@ export default class StripeManager {
 	}
 
 	// One Time Payment.
-	public async createOneTimePayment(who: Who, options: { identify?: string; customerId?: string; }, data?: { amount: number; metadata?: Record<string, string | number>; customerName?: string; }): Promise<Stripe.Checkout.Session | null> {
-		if (typeof data?.amount !== 'number') return null;
+	public async createOneTimePayment(who: Who, options?: UserData & { customerId?: string; }, data?: { amount: string; metadata?: Record<string, string>; name?: string; }): Promise<Stripe.Checkout.Session | null> {
+		if (!data?.amount || typeof parseFloat(data?.amount) !== 'number') return null;
 
 		const defaultPaymentOptions: Stripe.Checkout.SessionCreateParams = {
 			success_url: config.stripe[(who.account.split('|')[0] as StripeUsers)].links.success,
@@ -285,14 +288,14 @@ export default class StripeManager {
 					product_data: {
 						name: 'One Time Payment',
 					},
-					unit_amount: Math.round(data.amount * 100),
+					unit_amount: Math.round(Number(data?.amount) * 100),
 				},
 			}],
 		};
 
-		if (!options.identify && !options.customerId) return await this.getAccount(who.account)?.checkout.sessions.create(defaultPaymentOptions) || null;
+		if ((!options?.email || !options?.userId) && !options?.customerId) return await this.getAccount(who.account)?.checkout.sessions.create(defaultPaymentOptions) || null;
 		else {
-			const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId }, { customerName: data.customerName }, true);
+			const customer = await this.getCustomer(who, options, { name: data.name }, true);
 			if (!customer) return null;
 
 			return await this.getAccount(who.account)?.checkout.sessions.create({
@@ -309,8 +312,8 @@ export default class StripeManager {
 	}
 
 	// Customer Portal.
-	public async createPortalSession(who: Who, options: { identify?: string; customerId?: string; }, intention?: ('payment_method_update' | 'subscription_cancel')): Promise<Stripe.BillingPortal.Session | null> {
-		const customer = await this.getCustomer(who, { identify: options.identify, customerId: options.customerId });
+	public async createPortalSession(who: Who, options: UserData & { customerId?: string; }, intention?: ('payment_method_update' | 'subscription_cancel')): Promise<Stripe.BillingPortal.Session | null> {
+		const customer = await this.getCustomer(who, options);
 		if (!customer) return null;
 
 		return await this.getAccount(who.account)?.billingPortal.sessions.create({
