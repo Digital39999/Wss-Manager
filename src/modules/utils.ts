@@ -3,6 +3,7 @@ import { Message, APIEmbed, EmbedType, Activity } from 'discord.js';
 import { Response, Request } from 'express';
 import config from '../data/config';
 import WssManager from '../index';
+import JWT from 'jsonwebtoken';
 import Stripe from 'stripe';
 
 export function formatMessage(message: Message) {
@@ -191,21 +192,20 @@ export async function webhookEvents(event: Stripe.Event, res: Response): Promise
 	});
 }
 
+export type ValidKeys = 'userId' | 'email' | Idable | Coupon;
+export type Coupon = 'code' | 'percentage' | 'duration' | 'maxClaims';
+export type Idable = `${('customer' | 'subscription' | 'session' | 'coupon' | 'invoice')}Id`;
+export type BodyOrQuery<T extends ValidKeys, U extends string> = { required: Record<T, string>, optional: Record<U, string> } | false | null;
 
-type ValidKeys = 'userId' | 'email' | Idable | Coupon;
-type Coupon = 'code' | 'percentage' | 'duration' | 'maxClaims';
-type Idable = `${('customer' | 'subscription' | 'session' | 'coupon' | 'invoice')}Id`;
-type Body<T extends PropertyKey, U extends string> = { required: Record<T, string>, optional: Record<U, string> } | false | null;
-
-export function checkBody<T extends ValidKeys, U extends string>(body: Request['body'], required?: T[], optional?: U[]): Body<T, U> {
-	if (!body || Object.keys(body).length === 0) return false;
+export function checkBody<T extends ValidKeys, U extends string>(body: Request['body'], required?: T[], optional?: U[]): BodyOrQuery<T, U> {
+	if (!body || Object.keys(body).length === 0) return { required: {} as Record<T, string>, optional: {} as Record<U, string> };
 
 	const optionalOutput = {} as { [x in U]: string };
 	const requiredOutput = {} as { [K in ValidKeys]: string };
 
-	if (!required?.some((k) => body?.[k as keyof typeof body])) return null;
+	if (required && !required?.some((k) => body?.[k as keyof typeof body])) return null;
 
-	for (const key of required) {
+	for (const key of required || []) {
 		if (body[key] !== undefined) requiredOutput[key] = body[key];
 	}
 
@@ -213,15 +213,46 @@ export function checkBody<T extends ValidKeys, U extends string>(body: Request['
 		if (body[key] !== undefined) optionalOutput[key] = body[key];
 	}
 
+	return checkOutputs({ required: requiredOutput, optional: optionalOutput }, required, optional);
+}
+
+export function checkQuery<T extends ValidKeys, U extends string>(query: Request['query'], key: string, required?: T[], optional?: U[]): BodyOrQuery<T, U> {
+	if (!query || !query.token) return { required: {} as Record<T, string>, optional: {} as Record<U, string> };
+
+	try {
+		const queryData = JWT.verify(query.token as string, key) as Request['body'];
+
+		const optionalOutput = {} as { [x in U]: string };
+		const requiredOutput = {} as { [K in ValidKeys]: string };
+
+		if (required && !required?.some((k) => queryData?.[k as keyof typeof queryData])) return null;
+
+		for (const key of required || []) {
+			if (queryData[key] !== undefined) requiredOutput[key] = queryData[key];
+		}
+
+		for (const key of optional || []) {
+			if (queryData[key] !== undefined) optionalOutput[key] = queryData[key];
+		}
+
+		return checkOutputs({ required: requiredOutput, optional: optionalOutput }, required, optional);
+	} catch (e) {
+		return null;
+	}
+}
+
+export function checkOutputs<T extends ValidKeys, U extends string>(output: { required: { [K in ValidKeys]: string }; optional: { [x in U]: string }; }, required?: T[], optional?: U[]): BodyOrQuery<T, U> {
 	const checks = {
-		1: (Object.keys(requiredOutput).length > 2 && (!body.email || !body.userId)),
-		2: (Object.keys(requiredOutput).length === 1 && (body.email || body.userId)),
+		1: ((required?.some((r) => r === 'email') && !output.required.email) || (required?.some((r) => r === 'userId') && !output.required.userId)),
+		2: (required?.some((r) => r.endsWith('Id')) && !(output.required.customerId || output.required.subscriptionId || output.required.sessionId || output.required.couponId || output.required.invoiceId)),
 	};
 
-	if (checks[1] || checks[2]) return null;
-	if (!requiredOutput.userId?.match(/^[0-9]{17,19}$/) || !requiredOutput.email?.match(/^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/)) return null;
+	console.log(required?.length || 0, Object.keys(output.required).length, optional?.length || 0, Object.keys(output.optional).length);
+	console.log(checks[1], checks[2]);
 
-	return { required: requiredOutput, optional: optionalOutput };
+	if (checks[1] && checks[2]) return false;
+
+	return { required: output.required, optional: output.optional };
 }
 
 export function getClientIdentifier(req: Request): string | null {
@@ -275,3 +306,6 @@ export function generateRandomString(length?: number): string {
 	return result;
 }
 
+export function hasKeys(obj?: object): number {
+	return Object.keys(obj || {}).length;
+}
