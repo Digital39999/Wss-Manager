@@ -151,6 +151,8 @@ export default class StripeManager {
 
 	// Waya Subscription.
 	public async createWayaSubscription(who: Who, options: UserData & { customerId?: string; }, data: { amount?: string; metadata?: Record<string, string>; name?: string; }): Promise<Stripe.Checkout.Session | null> {
+		if (data.amount && (Number(data.amount) < 1 || Number(data.amount) > 10000)) return null;
+
 		const customer = await this.getCustomer(who, options) || await this.createCustomer(who, options, data);
 		if (!customer) return null;
 
@@ -271,7 +273,7 @@ export default class StripeManager {
 
 	// One Time Payment.
 	public async createOneTimePayment(who: Who, options?: UserData & { customerId?: string; }, data?: { amount: string; metadata?: Record<string, string>; name?: string; }): Promise<Stripe.Checkout.Session | null> {
-		if (!data?.amount || typeof parseFloat(data?.amount) !== 'number') return null;
+		if (!data?.amount || data?.amount && (Number(data?.amount) < 1 || Number(data?.amount) > 10000)) return null;
 
 		const defaultPaymentOptions: Stripe.Checkout.SessionCreateParams = {
 			success_url: config.stripe[(who.account.split('|')[0] as StripeUsers)].links.success,
