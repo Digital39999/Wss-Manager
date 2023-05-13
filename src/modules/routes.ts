@@ -82,6 +82,7 @@ export default class HttpManager {
 
 	private async loadRoutes() {
 		await this.loadEmojis();
+		await this.loadUptime();
 		await this.mainWebsite();
 		await this.evalEndpoint();
 
@@ -182,6 +183,39 @@ export default class HttpManager {
 				data: {
 					url: payment?.url,
 				},
+			});
+		});
+	}
+
+	private async loadUptime() {
+		this.app.get('/uptime', express.json(), async (req, res) => {
+			const uptime = WssManager.gatewayManager?.checkOnlineStatus();
+			if (!uptime) return res.status(503).json({
+				status: 503,
+				message: 'Failed to get uptimes.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: uptime,
+			});
+		});
+
+		this.app.get('/uptime/:id', express.json(), async (req, res) => {
+			if (!req.params.id) return res.status(400).json({
+				status: 400,
+				message: 'Missing params Id.',
+			});
+
+			const uptime = WssManager.gatewayManager?.checkOnlineStatus(req.params.id);
+			if (!uptime) return res.status(503).json({
+				status: 503,
+				message: 'Failed to get uptime.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: uptime,
 			});
 		});
 	}

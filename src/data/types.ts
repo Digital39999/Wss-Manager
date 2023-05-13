@@ -26,6 +26,11 @@ export interface CustomClient extends Client {
 }
 
 export interface WsClient {
-	socket: ws.WebSocket,
-	lastHeartbeat?: number
+	socket: ws.WebSocket;
+	lastHeartbeat?: number;
+}
+
+export interface WsUptimeClient extends WsClient {
+	spamOrigin?: string;
+	uptimeSinceConnected?: number;
 }

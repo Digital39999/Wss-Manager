@@ -197,7 +197,7 @@ type Coupon = 'code' | 'percentage' | 'duration' | 'maxClaims';
 type Idable = `${('customer' | 'subscription' | 'session' | 'coupon' | 'invoice')}Id`;
 type Body<T extends PropertyKey, U extends string> = { required: Record<T, string>, optional: Record<U, string> } | false | null;
 
-export function checkBody<T extends ValidKeys, U extends string>(body: Request['body'], required?: T[], optional?: U[]) : Body<T, U> {
+export function checkBody<T extends ValidKeys, U extends string>(body: Request['body'], required?: T[], optional?: U[]): Body<T, U> {
 	if (!body || Object.keys(body).length === 0) return false;
 
 	const optionalOutput = {} as { [x in U]: string };
@@ -261,5 +261,17 @@ export function formatTime(milliseconds: number, shortOutput: boolean): string {
 	}
 
 	return parts.length > 0 ? parts.join(' ') : '0' + (shortOutput ? 'ms' : ' milliseconds');
+}
+
+export function generateRandomString(length?: number): string {
+	const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	let result = '';
+
+	for (let i = 0; i < (length || 69); i++) {
+		const randomIndex = Math.floor(Math.random() * characters.length);
+		result += characters.charAt(randomIndex);
+	}
+
+	return result;
 }
 

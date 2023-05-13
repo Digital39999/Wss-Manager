@@ -1,4 +1,4 @@
-import { BaseMessage, GatewayIdentifications, MessageTypes, WsClient, ResponseData, EventTypes } from '../data/types';
+import { BaseMessage, GatewayIdentifications, MessageTypes, WsClient, ResponseData, EventTypes, WsUptimeClient } from '../data/types';
 import { formatMessage } from './utils';
 import { randomBytes } from 'crypto';
 import { Message } from 'discord.js';
@@ -47,17 +47,17 @@ abstract class BaseGatewayManager {
 
 			socket.on('pong', () => {
 				const client = this.clients.get(identify);
-				if (client) client.lastHeartbeat = Date.now();
+				if (client) this.clients.set(identify, { ...client, lastHeartbeat: Date.now() });
 			});
 
 			socket.on('close', () => {
-				this.clients.delete(identify);
 				LoggerModule('Gateway', `${identify} disconnected from the gateway.`, 'yellow');
+				this.clients.delete(identify);
 			});
 
 			socket.on('error', (error) => {
-				this.clients.delete(identify);
 				LoggerModule('Gateway', `${identify} disconnected from the gateway.`, 'yellow');
+				this.clients.delete(identify);
 				console.error(error);
 			});
 		});
@@ -246,7 +246,95 @@ abstract class BaseGatewayManager {
 	}
 }
 
-export default class GatewayManager extends BaseGatewayManager {
+abstract class UptimeTracker extends BaseGatewayManager {
+	private uptimeWss: ws.Server;
+	public uptimeClients: Map<string, WsUptimeClient>;
+
+	constructor() {
+		super();
+
+		this.uptimeWss = new ws.Server({ port: config.ports.uptime });
+		this.uptimeClients = new Map();
+
+		this.uptimeWss.on('connection', async (socket, message) => {
+			const identify = message.headers.authorization;
+			const origin = message.socket.remoteAddress || message.headers.origin;
+
+			if (!identify || !origin || identify.length < 20 || !this.canConnect(identify, origin)) return socket.close(1008, 'You are not allowed to connect to this gateway, valid authorization has to be at least 20 characters long.');
+			socket.send(JSON.stringify({ connected: true })); // Client successfully authenticated.
+
+			this.uptimeClients.set(identify, {
+				socket,
+				lastHeartbeat: Date.now(),
+				uptimeSinceConnected: Date.now(),
+				spamOrigin: origin,
+			});
+
+			socket.on('pong', () => {
+				const client = this.uptimeClients.get(identify);
+				if (client) this.uptimeClients.set(identify, { ...client, lastHeartbeat: Date.now() });
+			});
+
+			socket.on('close', () => this.uptimeClients.delete(identify));
+			socket.on('error', () => this.uptimeClients.delete(identify));
+		});
+
+		LoggerModule('Uptimes', `Listening on port ${config.ports.uptime}.`, 'green');
+		this.sendUptimeHeartbeat();
+	}
+
+	/* ----------------------------------- Socket ----------------------------------- */
+
+	private sendUptimeHeartbeat() {
+		setInterval(() => {
+			for (const [key, client] of this.clients) {
+				if ((Date.now() - (client.lastHeartbeat || 0)) > 90000) { // 1 minute 30 seconds
+					client.socket.close(4000, 'Heartbeat timeout.');
+					this.clients.delete(key);
+				}
+
+				client.socket.ping();
+			}
+		}, 45000); // 45 seconds
+	}
+
+	private canConnect(identify: string, origin: string) {
+		if (this.uptimeClients.get(identify)) return false;
+
+		const spam = [...this.uptimeClients.values()].filter((client) => client.spamOrigin === origin);
+		if (spam.length > 10) return false;
+
+		return true;
+	}
+
+	public checkOnlineStatus(key?: string) {
+		if (!key) {
+			const data: Record<string, { uptime: number; state: string; lastHeartbeat?: number; }> = {};
+
+			for (const [key, client] of this.uptimeClients.entries()) {
+				data[key] = {
+					uptime: Date.now() - (client.uptimeSinceConnected || 0),
+					state: ['Connecting', 'Open', 'Closing', 'Closed'][client.socket.readyState],
+					lastHeartbeat: client.lastHeartbeat,
+				};
+			}
+
+			if (Object.keys(data).length === 0) return null;
+			return data;
+		} else {
+			const client = this.uptimeClients.get(key);
+			if (!client) return null;
+
+			return {
+				uptime: Date.now() - (client.uptimeSinceConnected || 0),
+				state: ['Connecting', 'Open', 'Closing', 'Closed'][client.socket.readyState],
+				lastHeartbeat: client.lastHeartbeat,
+			};
+		}
+	}
+}
+
+export default class GatewayManager extends UptimeTracker {
 	constructor() {
 		super();
 	}
