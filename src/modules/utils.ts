@@ -241,7 +241,7 @@ export function checkBody<T extends ValidKeys, U extends string>(body: Request['
 		if (body[key] !== undefined) optionalOutput[key] = body[key];
 	}
 
-	return checkOutputs({ required: requiredOutput, optional: optionalOutput }, required, optional);
+	return checkOutputs({ required: requiredOutput, optional: optionalOutput }, required);
 }
 
 export function checkQuery<T extends ValidKeys, U extends string>(query: Request['query'], key: string, required?: T[], optional?: U[]): BodyOrQuery<T, U> {
@@ -263,20 +263,17 @@ export function checkQuery<T extends ValidKeys, U extends string>(query: Request
 			if (queryData[key] !== undefined) optionalOutput[key] = queryData[key];
 		}
 
-		return checkOutputs({ required: requiredOutput, optional: optionalOutput }, required, optional);
+		return checkOutputs({ required: requiredOutput, optional: optionalOutput }, required);
 	} catch (e) {
 		return null;
 	}
 }
 
-export function checkOutputs<T extends ValidKeys, U extends string>(output: { required: { [K in ValidKeys]: string }; optional: { [x in U]: string }; }, required?: T[], optional?: U[]): BodyOrQuery<T, U> {
+export function checkOutputs<T extends ValidKeys, U extends string>(output: { required: { [K in ValidKeys]: string }; optional: { [x in U]: string }; }, required?: T[]): BodyOrQuery<T, U> {
 	const checks = {
 		1: ((required?.some((r) => r === 'email') && !output.required.email) || (required?.some((r) => r === 'userId') && !output.required.userId)),
 		2: (required?.some((r) => r.endsWith('Id')) && !(output.required.customerId || output.required.subscriptionId || output.required.sessionId || output.required.couponId || output.required.invoiceId)),
 	};
-
-	console.log(required?.length || 0, Object.keys(output.required).length, optional?.length || 0, Object.keys(output.optional).length);
-	console.log(checks[1], checks[2]);
 
 	if (checks[1] && checks[2]) return false;
 

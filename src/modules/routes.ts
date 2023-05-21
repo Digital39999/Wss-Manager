@@ -356,7 +356,6 @@ export default class HttpManager {
 			if (!identify) return;
 
 			const stripeCheck = checkBody(req.body, ['email', 'userId', 'customerId'], ['newEmail', 'metadata', 'name']);
-			console.log(stripeCheck);
 			if (!stripeCheck) return res.status(400).json({
 				status: 400,
 				message: 'Malformed body or invalid values, required keys are `email` and `userId` or `customerId` and `newEmail`, allowed are `metadata`.',
@@ -428,7 +427,6 @@ export default class HttpManager {
 			});
 
 			const subscription = await WssManager.stripeManager?.[hasKeys(stripeCheck.required) ? ((stripeCheck.required.subscriptionId && hasKeys(stripeCheck.required) === 1) ? 'getSubscription' : 'getUserSubscriptions') : 'getAllSubscriptions'](identify, stripeCheck.required || {});
-			console.log(subscription);
 			if (Array.isArray(subscription) ? !subscription.length : !subscription) return res.status(400).json({
 				status: 400,
 				message: 'Failed to get subscription(s).',
@@ -487,7 +485,6 @@ export default class HttpManager {
 			if (!identify) return;
 
 			const stripeCheck = checkBody(req.body, ['email', 'userId', 'customerId'], ['amount', 'metadata', 'name']);
-			console.log(stripeCheck, 1);
 			if (!stripeCheck) return res.status(400).json({
 				status: 400,
 				message: 'Malformed body or invalid values, required keys are `email` and `userId` or `customerId`, allowed keys are `amount` and `metadata`.',

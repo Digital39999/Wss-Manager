@@ -15,6 +15,8 @@ export default class DataManager {
 	constructor(connection: Connection) {
 		this.state = false;
 		this.connection = connection;
+
+		this.WssManagerModels();
 	}
 
 	/* ----------------------------------- Utils ----------------------------------- */
