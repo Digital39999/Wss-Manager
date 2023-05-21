@@ -1,4 +1,4 @@
-import LocalDataBase from '../modules/database/core';
+import DataManager from '../modules/dataManager';
 import GatewayManager from '../modules/gateway';
 import StripeManager from '../modules/stripe';
 import HttpManager from '../modules/routes';
@@ -13,6 +13,7 @@ export type ParsedStripeUsers = StripeUsers | `${StripeUsers}|Dev`;
 export type Who = { account: ParsedStripeUsers; clientId: GatewayIdentifications; };
 export type StripeEvents = 'started' | 'ended' | 'canceled' | 'unpaid' | 'other' | 'oneTimePaid';
 export type MessageTypes = 'shutdown' | 'restart' | 'auth' | 'requireReply' | 'stripeEvent' | 'eval' | 'raw';
+export type ConnectionState = 'Disconnected' | 'Connected' | 'Connecting' | 'Disconnecting' | 'Uninitialized';
 export type GatewayIdentifications = keyof typeof config.gatewayIdentifications | `${keyof typeof config.gatewayIdentifications}|Dev`;
 export type BaseMessage = { type: MessageTypes; data: { eventData: object | string | boolean | number; eventType?: EventTypes; }; key?: string; };
 export type ResponseData = { timeAdded: number; resolve: ResolveFunction; clientId: GatewayIdentifications; keyWhichIsKey: string; shouldWait?: boolean; message?: BaseMessage; };
@@ -22,7 +23,7 @@ export interface CustomClient extends Client {
 	stripeManager?: StripeManager;
 	httpManager?: HttpManager;
 
-	localDataBase?: LocalDataBase;
+	dataManager?: DataManager;
 }
 
 export interface WsClient {

@@ -1,4 +1,4 @@
-import { StripeUsers, ParsedStripeUsers, Who } from '../data/types';
+import { StripeUsers, ParsedStripeUsers, Who } from '../data/typings';
 import LoggerModule from './logger';
 import config from '../data/config';
 import Stripe from 'stripe';

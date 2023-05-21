@@ -1,6 +1,6 @@
 import { checkBody, formatActivities, getClientFromKey, webhookEvents, getClientIdentifier, formatTime, checkQuery, hasKeys } from './utils';
 import { RateLimiterMemory, BurstyRateLimiter, RateLimiterRes } from 'rate-limiter-flexible';
-import { GatewayIdentifications, ParsedStripeUsers } from '../data/types';
+import { GatewayIdentifications, ParsedStripeUsers } from '../data/typings';
 import express, { Request, Response } from 'express';
 import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
@@ -15,6 +15,7 @@ export default class HttpManager {
 	constructor() {
 		this.app = express();
 		this.liveIcons = {};
+		console.log(cors());
 		this.app.use(cors());
 
 		this.app.get('/', express.json(), (req, res) => {

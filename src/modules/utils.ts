@@ -1,4 +1,4 @@
-import { GatewayIdentifications, ParsedStripeUsers } from '../data/types';
+import { GatewayIdentifications, ParsedStripeUsers } from '../data/typings';
 import { Message, APIEmbed, EmbedType, Activity } from 'discord.js';
 import { Response, Request } from 'express';
 import config from '../data/config';

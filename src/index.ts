@@ -1,7 +1,7 @@
 import { ActivityType, ChannelType, Client, GatewayIntentBits, Options } from 'discord.js';
-import { CustomClient, GatewayIdentifications } from './data/types';
+import { CustomClient, GatewayIdentifications } from './data/typings';
 import LoggerModule, { LoggerBoot } from './modules/logger';
-import LocalDataBase from './modules/database/core';
+import DataManager from './modules/dataManager';
 import GatewayManager from './modules/gateway';
 import StripeManager from './modules/stripe';
 import HttpManager from './modules/routes';
@@ -72,7 +72,7 @@ WssManager.httpManager = new HttpManager();
 WssManager.stripeManager = new StripeManager();
 WssManager.gatewayManager = new GatewayManager();
 
-WssManager.localDataBase = new LocalDataBase();
+WssManager.dataManager = new DataManager();
 
 /* ----------------------------------- Utils ----------------------------------- */
 

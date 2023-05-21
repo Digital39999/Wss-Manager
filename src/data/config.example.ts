@@ -54,6 +54,7 @@ export default {
 
 	support: 'https://discord.gg/4rphpersCa',
 
+	database: '',
 	clientKeys: {
 		emojis: '',
 		eval: '',
