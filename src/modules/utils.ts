@@ -1,10 +1,38 @@
 import { GatewayIdentifications, ParsedStripeUsers } from '../data/typings';
 import { Message, APIEmbed, EmbedType, Activity } from 'discord.js';
+import mongoose, { Connection } from 'mongoose';
 import { Response, Request } from 'express';
 import config from '../data/config';
+import LoggerModule from './logger';
 import WssManager from '../index';
 import JWT from 'jsonwebtoken';
 import Stripe from 'stripe';
+
+export function connectMongoose() {
+	return new Promise<Connection>((resolve, reject) => {
+		mongoose.set('strictQuery', false);
+		mongoose.connect(config?.database as string);
+
+		mongoose.connection.on('connected', async () => {
+			LoggerModule('Database', 'Connected to MongoDB.\n', 'magenta');
+			if (WssManager.dataManager) WssManager.dataManager.state = true;
+
+			resolve(mongoose.connection);
+		});
+
+		mongoose.connection.on('disconnected', async () => {
+			LoggerModule('Database', 'Disconnected from MongoDB.\n', 'red');
+			if (WssManager.dataManager) WssManager.dataManager.state = false;
+		});
+
+		mongoose.connection.on('error', async (er: unknown) => {
+			LoggerModule('Database', 'Failed to connect to MongoDB.\n', 'red');
+			if (WssManager.dataManager) WssManager.dataManager.state = false;
+
+			reject('Failed to connect to MongoDB. ' + er);
+		});
+	});
+}
 
 export function formatMessage(message: Message) {
 	const formatedMessage: { content: string; embeds: APIEmbed[]; files: string[]; channelId: string; } = {

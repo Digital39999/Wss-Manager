@@ -11,6 +11,7 @@ export type ResolveFunction = (data: unknown) => void;
 export type EventTypes = StripeEvents | 'systemMessage';
 export type ParsedStripeUsers = StripeUsers | `${StripeUsers}|Dev`;
 export type Who = { account: ParsedStripeUsers; clientId: GatewayIdentifications; };
+export type FnType = Awaited<ReturnType<typeof DataManager['prototype']['collectionModel']>>;
 export type StripeEvents = 'started' | 'ended' | 'canceled' | 'unpaid' | 'other' | 'oneTimePaid';
 export type MessageTypes = 'shutdown' | 'restart' | 'auth' | 'requireReply' | 'stripeEvent' | 'eval' | 'raw';
 export type ConnectionState = 'Disconnected' | 'Connected' | 'Connecting' | 'Disconnecting' | 'Uninitialized';

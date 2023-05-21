@@ -6,6 +6,7 @@ import GatewayManager from './modules/gateway';
 import StripeManager from './modules/stripe';
 import HttpManager from './modules/routes';
 import config from './data/config';
+import { connectMongoose } from './modules/utils';
 
 /* ----------------------------------- Process ----------------------------------- */
 
@@ -68,11 +69,14 @@ const WssManager: CustomClient = new Client({
 
 /* ----------------------------------- Custom ----------------------------------- */
 
-WssManager.httpManager = new HttpManager();
-WssManager.stripeManager = new StripeManager();
-WssManager.gatewayManager = new GatewayManager();
+(async () => {
+	const DB = await connectMongoose();
 
-WssManager.dataManager = new DataManager();
+	WssManager.dataManager = new DataManager(DB);
+	WssManager.httpManager = new HttpManager();
+	WssManager.stripeManager = new StripeManager();
+	WssManager.gatewayManager = new GatewayManager();
+})();
 
 /* ----------------------------------- Utils ----------------------------------- */
 

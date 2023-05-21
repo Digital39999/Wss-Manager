@@ -6,7 +6,6 @@ import WssManager, { evalExecute } from '../index';
 import emojis from '../data/emojis';
 import config from '../data/config';
 import LoggerModule from './logger';
-import cors from 'cors';
 
 export default class HttpManager {
 	private app: express.Application;
@@ -15,8 +14,14 @@ export default class HttpManager {
 	constructor() {
 		this.app = express();
 		this.liveIcons = {};
-		console.log(cors());
-		this.app.use(cors());
+
+		this.app.use((req, res, next) => {
+			res.header('Access-Control-Allow-Origin', '*');
+			res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, stripe-signature');
+			res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+
+			next();
+		});
 
 		this.app.get('/', express.json(), (req, res) => {
 			res.status(200).json({

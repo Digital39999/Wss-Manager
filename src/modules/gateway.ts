@@ -1,4 +1,4 @@
-import { BaseMessage, GatewayIdentifications, MessageTypes, WsClient, ResponseData, EventTypes, WsUptimeClient } from '../data/typings';
+import { BaseMessage, GatewayIdentifications, MessageTypes, WsClient, ResponseData, EventTypes, WsUptimeClient, FnType } from '../data/typings';
 import { formatMessage } from './utils';
 import { randomBytes } from 'crypto';
 import { Message } from 'discord.js';
@@ -11,7 +11,6 @@ abstract class BaseGatewayManager {
 	private wss: ws.Server;
 	public clients: Map<GatewayIdentifications, WsClient>;
 	private waitingForResponse: Map<string, ResponseData>;
-	private readonly dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway');
 
 	constructor() {
 		this.wss = new ws.Server({ port: config.ports.ws });
@@ -39,7 +38,8 @@ abstract class BaseGatewayManager {
 							this.waitingForResponse.delete(message.key);
 						}
 
-						if (this.dataModel) await WssManager.dataManager?.deleteData(this.dataModel, { key: message.key });
+						const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
+						await WssManager.dataManager?.deleteData(dataModel, { key: message.key });
 
 						break;
 					}
@@ -79,20 +79,26 @@ abstract class BaseGatewayManager {
 					this.waitingForResponse.delete(packet.keyWhichIsKey);
 
 					if (!packet.shouldWait) packet.resolve(null);
-					else if (this.dataModel) WssManager.dataManager?.getData(this.dataModel, {
-						key: packet.keyWhichIsKey,
-						fromWho: packet.clientId,
-						data: packet.message,
-						lastTried: Date.now(),
-					}, true);
+					else {
+						const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
+
+						WssManager.dataManager?.getData(dataModel, {
+							key: packet.keyWhichIsKey,
+							fromWho: packet.clientId,
+							data: packet.message,
+							lastTried: Date.now(),
+						}, true);
+					}
 				}
 			}
 		}, 20000); // 20 seconds
 	}
 
 	private handleNondeliveredEvents() {
+		const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
+
 		setInterval(async () => {
-			const allPackets = this.dataModel ? await WssManager.dataManager?.getAllData(this.dataModel) || [] : [];
+			const allPackets = await WssManager.dataManager?.getAllData(dataModel) || [];
 
 			for (const packet of allPackets) {
 				if ((Date.now() - packet.lastTried) > 20000) { // 20 seconds
@@ -105,7 +111,7 @@ abstract class BaseGatewayManager {
 						data: packet.data.data,
 					} as BaseMessage));
 
-					if (this.dataModel) WssManager.dataManager?.updateData(this.dataModel, {
+					WssManager.dataManager?.updateData(dataModel, {
 						key: packet.key,
 					}, {
 						lastTried: Date.now(),
@@ -175,7 +181,8 @@ abstract class BaseGatewayManager {
 					if (!client) {
 						LoggerModule('Gateway', `${identify} is not connected to the gateway, saving.`, 'cyan');
 
-						if (this.dataModel) WssManager.dataManager?.createData(this.dataModel, {
+						const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
+						WssManager.dataManager?.createData(dataModel, {
 							key: randomBytes(16).toString('hex'),
 							fromWho: identify,
 							lastTried: Date.now(),

@@ -1,7 +1,5 @@
-import { BaseMessage, GatewayIdentifications } from '../data/typings';
-import mongoose, { FilterQuery } from 'mongoose';
-import config from '../data/config';
-import LoggerModule from './logger';
+import { BaseMessage, FnType, GatewayIdentifications } from '../data/typings';
+import { FilterQuery, Schema, Connection } from 'mongoose';
 
 export type GatewaySchema = {
 	key: string;
@@ -12,42 +10,25 @@ export type GatewaySchema = {
 
 export default class DataManager {
 	public state: boolean;
+	private connection: Connection;
 
-	constructor() {
+	constructor(connection: Connection) {
 		this.state = false;
-		this.init();
+		this.connection = connection;
 	}
 
-	private init() {
-		mongoose.set('strictQuery', false);
-		mongoose.connect(config?.database as string);
+	/* ----------------------------------- Utils ----------------------------------- */
 
-		mongoose.connection.on('connected', async () => {
-			LoggerModule('Database', 'Connected to MongoDB.', 'magenta');
-			this.WssManagerModels();
-			this.state = true;
-		});
-
-		mongoose.connection.on('disconnected', async () => {
-			LoggerModule('Database', 'Disconnected from MongoDB.\n', 'red');
-			this.state = false;
-		});
-
-		mongoose.connection.on('error', async (er: unknown) => {
-			LoggerModule('Database', 'Failed to connect to MongoDB.\n', 'red');
-			this.state = false; throw new Error('Failed to connect to MongoDB. ' + er);
-		});
-	}
 
 	collectionModel(database: string, model: string) {
 		if (!this.state) return null;
-		return mongoose.connection.useDb(database)?.model(model) || null;
+		return this.connection.useDb(database)?.model(model) || null;
 	}
 
 	private WssManagerModels() {
-		const WssDB = mongoose.connection.useDb('WssManager');
+		const WssDB = this.connection.useDb('WssManager');
 
-		WssDB?.model<GatewaySchema>('gateway', new mongoose.Schema<GatewaySchema>({
+		WssDB?.model<GatewaySchema>('gateway', new Schema<GatewaySchema>({
 			key: { type: String, required: true, unique: true },
 
 			data: { type: Object, required: true },
@@ -58,14 +39,14 @@ export default class DataManager {
 
 	/* ----------------------------------- Mongoose Main ----------------------------------- */
 
-	async createData(model: Awaited<ReturnType<typeof this.collectionModel>>, inputData: object) {
+	async createData(model: FnType, inputData: object) {
 		if (this?.state !== true) return null;
 
 		const data = await model?.create(inputData)?.catch((): null => null) || null;
 		return data;
 	}
 
-	async getData(model: Awaited<ReturnType<typeof this.collectionModel>>, inputData: FilterQuery<object>, createOnFail?: boolean) {
+	async getData(model: FnType, inputData: FilterQuery<object>, createOnFail?: boolean) {
 		if (this.state !== true) return null;
 
 		const data = await model?.findOne(inputData)?.lean().catch((): null => null) || null;
@@ -74,21 +55,21 @@ export default class DataManager {
 		return await this.createData(model, inputData) || null;
 	}
 
-	async deleteData(model: Awaited<ReturnType<typeof this.collectionModel>>, inputData: FilterQuery<object>) {
+	async deleteData(model: FnType, inputData: FilterQuery<object>) {
 		if (this.state !== true) return null;
 
 		const data = await model?.findOneAndDelete(inputData)?.lean().catch((): null => null) || null;
 		return data;
 	}
 
-	async updateData(model: Awaited<ReturnType<typeof this.collectionModel>>, inputData: FilterQuery<object>, dataToUpdate: object) {
+	async updateData(model: FnType, inputData: FilterQuery<object>, dataToUpdate: object) {
 		if (this.state !== true) return null;
 
 		const data = await model?.findOneAndUpdate(inputData, dataToUpdate, { new: true })?.lean().catch((): null => null) || null;
 		return data;
 	}
 
-	async getAllData(model: Awaited<ReturnType<typeof this.collectionModel>>, inputData?: FilterQuery<object>) {
+	async getAllData(model: FnType, inputData?: FilterQuery<object>) {
 		if (this.state !== true) return null;
 
 		const data = await model?.find(inputData || {})?.lean().catch((): null => null) || null;
