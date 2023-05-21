@@ -1,4 +1,6 @@
-export default {
+import { APIMessageComponentEmoji } from 'discord.js';
+
+const Emojis = {
 	function: {
 		'off': '<:off:921476210352091176>',
 		'on': '<:on:921476210389819542>',
@@ -448,3 +450,31 @@ export default {
 		'icons_webp': '<:icons_webp:908958943550779413>',
 	},
 };
+
+/* ----------------------------------- Util ----------------------------------- */
+
+function getPropertyByPath(object: Record<string, Record<string, string>>, path: string): string {
+	let value: Record<string, Record<string, string>> | Record<string, string> | string = object;
+
+	for (const key of path.split('.')) {
+		if (!Object.prototype.hasOwnProperty.call(value, key)) return '';
+		value = value[key];
+	}
+
+	return value as unknown as string;
+}
+
+export function getEmojiCheck<T extends boolean>(path: string, format: T, perms: boolean): (T extends true ? APIMessageComponentEmoji : string) {
+	type Internal = T extends true ? APIMessageComponentEmoji : string;
+
+	if (!perms) return (format ? { name: undefined, id: undefined } : '') as unknown as Internal;
+	const emoji = getPropertyByPath(Emojis, path);
+
+	if (!format) return emoji as unknown as Internal;
+	else return {
+		id: emoji.split(':')[2].replace('>', ''),
+		name: emoji.split(':')[1],
+	} as unknown as Internal;
+}
+
+export default Emojis;

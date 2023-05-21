@@ -1,15 +1,16 @@
-import { GatewayIdentifications, ParsedStripeUsers } from '../data/typings';
-import { Message, APIEmbed, EmbedType, Activity } from 'discord.js';
-import mongoose, { Connection } from 'mongoose';
+import { AllInteractionTypes, CustomClient, GatewayIdentifications, ParsedStripeUsers, SliderActions } from '../data/typings';
+import { Message, APIEmbed, EmbedType, Activity, APIActionRowComponent, APIButtonComponent, APIStringSelectComponent, AnySelectMenuInteraction, ButtonInteraction, CommandInteraction, ComponentType, InteractionEditReplyOptions, MessageComponentInteraction, StringSelectMenuInteraction } from 'discord.js';
+import { getEmojiCheck } from '../data/emojis';
 import { Response, Request } from 'express';
 import config from '../data/config';
 import LoggerModule from './logger';
 import WssManager from '../index';
+import mongoose from 'mongoose';
 import JWT from 'jsonwebtoken';
 import Stripe from 'stripe';
 
 export function connectMongoose() {
-	return new Promise<Connection>((resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		mongoose.set('strictQuery', false);
 		mongoose.connect(config?.database as string);
 
@@ -17,7 +18,7 @@ export function connectMongoose() {
 			LoggerModule('Database', 'Connected to MongoDB.\n', 'magenta');
 			if (WssManager.dataManager) WssManager.dataManager.state = true;
 
-			resolve(mongoose.connection);
+			resolve(true);
 		});
 
 		mongoose.connection.on('disconnected', async () => {
@@ -222,7 +223,7 @@ export async function webhookEvents(event: Stripe.Event, res: Response): Promise
 
 export type ValidKeys = 'userId' | 'email' | Idable | Coupon;
 export type Coupon = 'code' | 'percentage' | 'duration' | 'maxClaims';
-export type Idable = `${('customer' | 'subscription' | 'session' | 'coupon' | 'invoice')}Id`;
+export type Idable = `${('customer' | 'subscription' | 'session' | 'coupon' | 'invoice' | 'product')}Id`;
 export type BodyOrQuery<T extends ValidKeys, U extends string> = { required: Record<T, string>, optional: Record<U, string> } | false | null;
 
 export function checkBody<T extends ValidKeys, U extends string>(body: Request['body'], required?: T[], optional?: U[]): BodyOrQuery<T, U> {
@@ -333,4 +334,146 @@ export function generateRandomString(length?: number): string {
 
 export function hasKeys(obj?: object): number {
 	return Object.keys(obj || {}).length;
+}
+
+// Those 3 functions are my personal masterpiece.
+export async function quickCollector(interaction: CommandInteraction | ButtonInteraction, data: InteractionEditReplyOptions, cb: (click: AnySelectMenuInteraction | ButtonInteraction | null | 1) => void): Promise<void> {
+	await interaction.editReply(data).then(async (m) => {
+		await m?.awaitMessageComponent({
+			time: 1000 * 60 * 10, // 10 minutes
+			filter: (inter) => {
+				if (config.developerIds.includes(inter.user.id)) return true;
+				else if (inter.user.id !== interaction.user.id) inter?.reply({
+					ephemeral: true,
+					content: 'You cannot manage that menu.',
+				});
+
+				return inter.user.id === interaction.user.id;
+			},
+		}).then((click) => {
+			if (!click) cb(null);
+
+			if (click?.customId === 'exit') {
+				interaction.editReply({
+					content: 'Successfully exited the menu.',
+					components: [], embeds: [],
+				}).catch(() => null);
+
+				return cb(1);
+			}
+
+			switch (click?.componentType) {
+				case ComponentType.Button: cb(click as Extract<MessageComponentInteraction, { componentType: ComponentType.Button }>); break;
+				case ComponentType.StringSelect: cb(click as Extract<MessageComponentInteraction, { componentType: ComponentType.StringSelect }>); break;
+				case ComponentType.RoleSelect: cb(click as Extract<MessageComponentInteraction, { componentType: ComponentType.RoleSelect }>); break;
+				case ComponentType.ChannelSelect: cb(click as Extract<MessageComponentInteraction, { componentType: ComponentType.ChannelSelect }>); break;
+				case ComponentType.UserSelect: cb(click as Extract<MessageComponentInteraction, { componentType: ComponentType.UserSelect }>); break;
+				default: cb(null); break;
+			}
+		}).catch(() => cb(null));
+	}).catch(() => cb(null));
+}
+
+export async function quickPageSlider<T extends APIEmbed[]>(client: CustomClient, interaction: CommandInteraction, allPages: T, _action?: SliderActions, _index?: T['length']) {
+	if (!_index) _index = 0;
+	if (!_action) _action = 'first';
+
+	// title MUST have ' • Page 0/x' at the end
+
+	const currentEmbed = allPages?.[(_index || 0)]; if (_action !== 'exit') {
+		const array = currentEmbed?.title?.split(' • '); array?.pop();
+
+		array?.push(`Page ${(_index || 0) + 1}/${allPages?.length}`);
+		currentEmbed.title = array?.join(' • ');
+	}
+
+	const components: APIActionRowComponent<APIButtonComponent | APIStringSelectComponent>[] = [{
+		type: 1,
+		components: [{
+			type: 3,
+			custom_id: 'select',
+			placeholder: 'Select a page to jump to',
+			min_values: 1,
+			max_values: 1,
+			disabled: allPages.length === 1,
+			options: allPages.map((page, index) => {
+				return {
+					label: `Page ${index + 1}`,
+					value: index.toString(),
+					emoji: getEmojiCheck('fromMyServer.dot', true, interaction.guild?.roles.everyone.permissionsIn(interaction.channelId).has('UseExternalEmojis') || false),
+				};
+			}),
+		}],
+	}, {
+		type: 1,
+		components: [{
+			type: 2,
+			label: 'Previous Page',
+			style: 1,
+			emoji: getEmojiCheck('fromMyServer.dot', true, interaction.guild?.roles.everyone.permissionsIn(interaction.channelId).has('UseExternalEmojis') || false),
+			disabled: _index === 0,
+			custom_id: 'previous',
+		}, {
+			type: 2,
+			label: 'Next Page',
+			style: 1,
+			emoji: getEmojiCheck('fromMyServer.dot', true, interaction.guild?.roles.everyone.permissionsIn(interaction.channelId).has('UseExternalEmojis') || false),
+			disabled: _index === allPages.length - 1,
+			custom_id: 'next',
+		}],
+	}, {
+		type: 1,
+		components: [{
+			type: 2,
+			label: 'First Page',
+			style: 1,
+			emoji: getEmojiCheck('fromMyServer.dot', true, interaction.guild?.roles.everyone.permissionsIn(interaction.channelId).has('UseExternalEmojis') || false),
+			disabled: _index === 0,
+			custom_id: 'first',
+		}, {
+			type: 2,
+			label: 'Last Page',
+			style: 1,
+			emoji: getEmojiCheck('fromMyServer.dot', true, interaction.guild?.roles.everyone.permissionsIn(interaction.channelId).has('UseExternalEmojis') || false),
+			disabled: _index === allPages.length - 1,
+			custom_id: 'last',
+		}],
+	}, {
+		type: 1,
+		components: [{
+			type: 2,
+			label: 'Close Menu',
+			style: 2,
+			emoji: getEmojiCheck('fromMyServer.dot', true, interaction.guild?.roles.everyone.permissionsIn(interaction.channelId).has('UseExternalEmojis') || false),
+			custom_id: 'exit',
+		}],
+	}];
+
+	await quickCollector(interaction, {
+		embeds: [currentEmbed],
+		components: components,
+	}, async (click) => {
+		if (click === 1) return; if (!click) return errorHandlerMenu(client, interaction);
+
+		await click.deferUpdate().catch(() => null);
+
+		const action = click?.customId as SliderActions;
+		const pageIndex = (action === 'select' ? parseInt((click as StringSelectMenuInteraction)?.values?.[0]) : action === 'first' ? 0 : action === 'last' ? allPages.length - 1 : action === 'next' ? (_index || 0) + 1 : action === 'previous' ? (_index || 1) - 1 : _index) as T['length'];
+
+		await quickPageSlider(client, interaction, allPages, action, pageIndex);
+	});
+}
+
+export async function errorHandlerMenu(client: CustomClient, interaction: AllInteractionTypes): Promise<void> {
+	if (!interaction || !client) LoggerModule('Functions ErrorHandler', 'No interaction or client was provided.', 'red');
+
+	const data = { ephemeral: true, content: 'Unknown error occurred, please try again.', embeds: [], components: [] };
+
+	if (interaction.replied) {
+		if (interaction.deferred) await interaction.editReply(data).catch(() => null);
+		else await interaction.followUp(data).catch(() => null);
+	} else {
+		if (interaction.deferred) await interaction.editReply(data).catch(() => null);
+		else await interaction.reply(data).catch(() => null);
+	}
 }

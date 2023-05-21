@@ -88,6 +88,9 @@ export default class HttpManager {
 		await this.mainWebsite();
 		await this.evalEndpoint();
 
+		await this.loadVotes(true);
+		await this.loadVotes(false);
+
 		await this.manageStripe(true);
 		await this.manageStripe(false);
 
@@ -185,6 +188,57 @@ export default class HttpManager {
 				data: {
 					url: payment?.url,
 				},
+			});
+		});
+
+		this.app.get('/redirects/:name', express.json(), async (req, res) => {
+			const redirect = await WssManager.dataManager?.getData('redirect', { name: req.params.name });
+			if (!redirect) return res.status(400).json({
+				status: 400,
+				message: 'Failed to get redirect.',
+			});
+
+			return res.status(200).json({
+				status: 200,
+				data: {
+					url: redirect.url,
+				},
+			});
+		});
+	}
+
+	private async loadVotes(dev: boolean) {
+		this.app.post(dev ? '/dev' : '' + '/votes', express.json(), async (req, res) => {
+			if (req.headers?.authorization !== config.clientKeys.data) return res.status(400).json({
+				status: 400,
+				message: 'You are not authorized to do this.',
+			});
+
+			if (!req.body) return res.status(400).json({
+				status: 400,
+				message: 'Missing body.',
+			});
+
+			let client: GatewayIdentifications | null = null;
+
+			switch (req.body.bot) {
+				case '857230367350063104': client = ('Waya' + (dev ? '|Dev' : '')) as GatewayIdentifications; break;
+				case '1097907896987160666': client = ('TextionalVoice' + (dev ? '|Dev' : '')) as GatewayIdentifications; break;
+				case '847180236545327164': client = ('StatusBot' + (dev ? '|Dev' : '')) as GatewayIdentifications; break;
+				case '872501852644704337': client = ('SystemUpdates' + (dev ? '|Dev' : '')) as GatewayIdentifications; break;
+				default: client = null; break;
+			}
+
+			if (!client) return res.status(400).json({
+				status: 400,
+				message: 'Invalid bot id.',
+			});
+
+			WssManager.gatewayManager?.send(client, 'requireReply', req.body);
+
+			return res.status(200).json({
+				status: 200,
+				message: 'Successfully sent vote.',
 			});
 		});
 	}

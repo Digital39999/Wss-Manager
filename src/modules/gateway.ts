@@ -1,4 +1,4 @@
-import { BaseMessage, GatewayIdentifications, MessageTypes, WsClient, ResponseData, EventTypes, WsUptimeClient, FnType } from '../data/typings';
+import { BaseMessage, GatewayIdentifications, MessageTypes, WsClient, ResponseData, EventTypes, WsUptimeClient } from '../data/typings';
 import { formatMessage } from './utils';
 import { randomBytes } from 'crypto';
 import { Message } from 'discord.js';
@@ -13,16 +13,25 @@ abstract class BaseGatewayManager {
 	private waitingForResponse: Map<string, ResponseData>;
 
 	constructor() {
-		this.wss = new ws.Server({ port: config.ports.ws });
+		this.wss = new ws.Server({
+			port: config.ports.ws,
+			verifyClient: (info, cb) => {
+				const identify = this.getIdentification(info.req.headers.authorization, info.req.url?.includes('/dev'));
+				if (!info.req.headers.authorization || !identify) return cb(false, 401, 'You are not allowed to connect to this gateway.');
+				else cb(true);
+			},
+		});
+
 		this.waitingForResponse = new Map();
 		this.clients = new Map();
 
 		this.wss.on('connection', async (socket, message) => {
-			const identify = this.getIdentification(message.headers?.authorization, message.url?.includes('/dev'));
-			if (!message.headers?.authorization || !identify) return socket.close(1008, 'You are not allowed to connect to this gateway.');
-			else socket.send(JSON.stringify({ type: 'auth', data: { eventData: true } } as BaseMessage)); // Client successfully authenticated.
+			const identify = this.getIdentification(message.headers.authorization, message.url?.includes('/dev'));
+			if (!identify) return socket.close(1008, 'You are not allowed to connect to this gateway, valid authorization has to be at least 20 characters long.');
 
+			socket.send(JSON.stringify({ type: 'auth', data: { eventData: true } } as BaseMessage)); // Client successfully authenticated.
 			LoggerModule('Gateway', `${identify} connected to the gateway.`, 'green');
+
 			this.clients.set(identify, { socket, lastHeartbeat: Date.now() });
 
 			socket.on('message', async (data) => {
@@ -38,8 +47,7 @@ abstract class BaseGatewayManager {
 							this.waitingForResponse.delete(message.key);
 						}
 
-						const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
-						await WssManager.dataManager?.deleteData(dataModel, { key: message.key });
+						await WssManager.dataManager?.deleteData('gateway', { key: message.key });
 
 						break;
 					}
@@ -63,42 +71,38 @@ abstract class BaseGatewayManager {
 			});
 		});
 
-		this.sendHeartbeat();
-		this.handleUnresolvedPromises();
-		this.handleNondeliveredEvents();
+		this.wss.on('listening', () => {
+			this.sendHeartbeat();
+			this.handleUnresolvedPromises();
+			this.handleNondeliveredEvents();
 
-		LoggerModule('Gateway', `Listening on port ${config.ports.ws}.`, 'green');
+			LoggerModule('Gateway', `Listening on port ${config.ports.ws}.`, 'green');
+		});
 	}
 
 	/* ----------------------------------- Utils ----------------------------------- */
 
-	private handleUnresolvedPromises() {
-		setInterval(() => {
+	private async handleUnresolvedPromises() {
+		setInterval(async () => {
 			for (const packet of this.waitingForResponse.values()) {
 				if ((Date.now() - packet.timeAdded) > 20000) { // 20 seconds
 					this.waitingForResponse.delete(packet.keyWhichIsKey);
 
 					if (!packet.shouldWait) packet.resolve(null);
-					else {
-						const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
-
-						WssManager.dataManager?.getData(dataModel, {
-							key: packet.keyWhichIsKey,
-							fromWho: packet.clientId,
-							data: packet.message,
-							lastTried: Date.now(),
-						}, true);
-					}
+					else WssManager.dataManager?.getData('gateway', {
+						key: packet.keyWhichIsKey,
+						fromWho: packet.clientId,
+						data: packet.message,
+						lastTried: Date.now(),
+					}, true);
 				}
 			}
 		}, 20000); // 20 seconds
 	}
 
-	private handleNondeliveredEvents() {
-		const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
-
+	private async handleNondeliveredEvents() {
 		setInterval(async () => {
-			const allPackets = await WssManager.dataManager?.getAllData(dataModel) || [];
+			const allPackets = await WssManager.dataManager?.getAllData('gateway') || [];
 
 			for (const packet of allPackets) {
 				if ((Date.now() - packet.lastTried) > 20000) { // 20 seconds
@@ -111,7 +115,7 @@ abstract class BaseGatewayManager {
 						data: packet.data.data,
 					} as BaseMessage));
 
-					WssManager.dataManager?.updateData(dataModel, {
+					WssManager.dataManager?.updateData('gateway', {
 						key: packet.key,
 					}, {
 						lastTried: Date.now(),
@@ -129,12 +133,11 @@ abstract class BaseGatewayManager {
 	private sendHeartbeat() {
 		setInterval(() => {
 			for (const [key, client] of this.clients) {
-				if ((Date.now() - (client.lastHeartbeat || 0)) > 90000) { // 1 minute 30 seconds
+				if ((Date.now() - (client.lastHeartbeat || 0)) < 90000) client.socket.ping();
+				else {
 					client.socket.close(4000, 'Heartbeat timeout.');
 					this.clients.delete(key);
 				}
-
-				client.socket.ping();
 			}
 		}, 45000); // 45 seconds
 	}
@@ -181,8 +184,7 @@ abstract class BaseGatewayManager {
 					if (!client) {
 						LoggerModule('Gateway', `${identify} is not connected to the gateway, saving.`, 'cyan');
 
-						const dataModel = WssManager.dataManager?.collectionModel('WssManager', 'gateway') as FnType;
-						WssManager.dataManager?.createData(dataModel, {
+						WssManager.dataManager?.createData('gateway', {
 							key: randomBytes(16).toString('hex'),
 							fromWho: identify,
 							lastTried: Date.now(),

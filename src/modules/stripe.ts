@@ -111,6 +111,13 @@ export default class StripeManager {
 		return (await this.getAccount(who.account)?.checkout.sessions.list({ customer: customer.id }))?.data || null;
 	}
 
+	// Products.
+	public async getProduct(who: Who, options: { productId?: string; }): Promise<Stripe.Product | null> {
+		if (!options.productId) return null;
+
+		return await this.getAccount(who.account)?.products.retrieve(options.productId) || null;
+	}
+
 	// Subscriptions.
 	public async getSubscription(who: Who, options: { subscriptionId?: string; }): Promise<Stripe.Subscription | null> {
 		if (!options.subscriptionId) return null;
@@ -150,7 +157,7 @@ export default class StripeManager {
 	}
 
 	// Waya Subscription.
-	public async createWayaSubscription(who: Who, options: UserData & { customerId?: string; }, data: { amount?: string; metadata?: Record<string, string>; name?: string; }): Promise<Stripe.Checkout.Session | null> {
+	public async createWayaSubscription(who: Who, options: UserData & { customerId?: string; }, data: { trialEnd?: string; amount?: string; metadata?: Record<string, string>; name?: string; }): Promise<Stripe.Checkout.Session | null> {
 		if (data.amount && (Number(data.amount) < 1 || Number(data.amount) > 10000)) return null;
 
 		const customer = await this.getCustomer(who, options) || await this.createCustomer(who, options, data);
@@ -175,7 +182,7 @@ export default class StripeManager {
 					product_data: {
 						name: 'Waya Subscription',
 					},
-					unit_amount: data?.amount && typeof parseFloat(data?.amount) === 'number' ? Math.round((Number(data.amount) || 0) * 100) || 300 : 300,
+					unit_amount: data?.amount && typeof parseFloat(data?.amount) === 'number' ? Math.round((Number(data.amount) || 0) * 100) || 321 : 321,
 					recurring: {
 						interval: 'month',
 						interval_count: 1,
@@ -183,6 +190,12 @@ export default class StripeManager {
 				},
 			}],
 			subscription_data: {
+				trial_period_days: data.trialEnd && typeof parseFloat(data.trialEnd) === 'number' ? Math.round((Number(data.trialEnd) || 0)) || 0 : 0,
+				trial_settings: data.trialEnd && typeof parseFloat(data.trialEnd) === 'number' ? {
+					end_behavior: {
+						missing_payment_method: 'cancel',
+					},
+				} : undefined,
 				metadata: {
 					...(typeof data?.metadata === 'object' ? data?.metadata : {}),
 					userId: customer.metadata.userId,

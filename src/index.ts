@@ -1,12 +1,13 @@
-import { ActivityType, ChannelType, Client, GatewayIntentBits, Options } from 'discord.js';
+import { ActivityType, Client, GatewayIntentBits, Options } from 'discord.js';
 import { CustomClient, GatewayIdentifications } from './data/typings';
 import LoggerModule, { LoggerBoot } from './modules/logger';
+import { connectMongoose } from './modules/utils';
 import DataManager from './modules/dataManager';
 import GatewayManager from './modules/gateway';
 import StripeManager from './modules/stripe';
 import HttpManager from './modules/routes';
 import config from './data/config';
-import { connectMongoose } from './modules/utils';
+import path from 'path';
 
 /* ----------------------------------- Process ----------------------------------- */
 
@@ -31,9 +32,9 @@ const WssManager: CustomClient = new Client({
 		GatewayIntentBits.GuildPresences, // API
 	],
 	presence: {
-		status: 'online',
+		status: 'dnd',
 		activities: [{
-			name: 'clients..',
+			name: 'gears booting up..',
 			type: ActivityType.Watching,
 		}],
 	},
@@ -106,21 +107,12 @@ export async function evalExecute(where: GatewayIdentifications | 'wss', code: s
 	}
 }
 
-/* ----------------------------------- Events & Login ----------------------------------- */
+/* ----------------------------------- Handlers ----------------------------------- */
 
-WssManager.on('ready', () => {
-	setTimeout(() => {
-		LoggerModule('Client', `Logged in as ${WssManager.user?.tag}!`, 'magenta', true);
-		LoggerModule('Logging', 'Listening for logs:\n', 'white');
-	}, 1000);
-});
+WssManager.slashCommands = new Map();
 
-WssManager.on('messageCreate', async (message) => {
-	if (message.channel.type !== ChannelType.GuildText) return;
-	if (message.channel.parentId !== config.systemUpdatesCategory) return;
-	if (message.channelId === '1104023489381412897') message.crosspost(); // Someones's Media
-
-	await WssManager.gatewayManager?.processSystemMessage(message);
+['loadEvents', 'slashCommands'].map(async (handler) => {
+	await import(path.join(__dirname, '.', 'handlers', handler)).then((module) => module.default(WssManager));
 });
 
 /* ----------------------------------- Exports & Errors ----------------------------------- */

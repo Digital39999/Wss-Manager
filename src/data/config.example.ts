@@ -9,6 +9,9 @@ export default {
 	token: dev ? '' : '',
 	devMode: dev,
 
+	useCache: true,
+	slashCommands: true,
+
 	stripe: {
 		Luna: {
 			accountId: '',
@@ -52,12 +55,14 @@ export default {
 		},
 	},
 
+	color: 0x5c6ceb,
 	support: 'https://discord.gg/4rphpersCa',
 
 	database: '',
 	clientKeys: {
 		emojis: '',
 		eval: '',
+		data: '',
 	},
 
 	systemUpdatesCategory: '',
