@@ -2,15 +2,15 @@ import { APIMessageComponentEmoji } from 'discord.js';
 
 const Emojis = {
 	function: {
-		'off': '<:off:921476210352091176>',
-		'on': '<:on:921476210389819542>',
-		'warn': '<:icons_onf:921482120134799360>',
+		'off': '<:off:963883351016611870>',
+		'on': '<:on:963883351012417667>',
+		'warn': '<:def:963883350970486814>',
 
-		'cross': '<:BotFunction_Cross:946803403256913982>',
-		'default': '<:BotFunction_Default:946803403630190642>',
-		'emergency': '<:BotFunction_Emergency:946803403743461446>',
-		'pending': '<:BotFunction_Pending:946803403630190643>',
-		'tick': '<:BotFunction_Tick:946803403454050325>',
+		'cross': '<:cross:946803403256913982>',
+		'default': '<:default:946803403630190642>',
+		'emergency': '<:emergency:946803403743461446>',
+		'pending': '<:pending:946803403630190643>',
+		'tick': '<:tick:946803403454050325>',
 	},
 	customBadges: {
 		'staff': '<:bot_staff:831039365680857098>',
@@ -18,6 +18,16 @@ const Emojis = {
 		'verified': '<:bot_verified:831039364804640789>',
 		'beta': '<:bot_beta:831039364825350164>',
 		'member': '<:bot_member:831039365303107654>',
+	},
+	newBadges: {
+		'admin': '<:admin:1112696834398367754>',
+		'artist': '<:artist:1112696837061742612>',
+		'member:': '<:ember:1112696838609444915>',
+		'settings': '<:settings:1112696849065840732>',
+		'shield': '<:shield:1112696847039991908>',
+		'staff:': '<:taff:1112696845219659928>',
+		'star': '<:star:1112696841579003955>',
+		'wrench': '<:wrench:1112696843265130506>',
 	},
 	discordBadges: {
 		'bug': '<:bugs:947273019431206932>',

@@ -538,7 +538,7 @@ export default class HttpManager {
 		this.app.post(baseRoute + '/subscriptions/waya', express.json(), async (req, res) => this.checkKey(req, res, dev, async (identify) => {
 			if (!identify) return;
 
-			const stripeCheck = checkBody(req.body, ['email', 'userId', 'customerId'], ['amount', 'metadata', 'name']);
+			const stripeCheck = checkBody(req.body, ['email', 'userId', 'customerId'], ['amount', 'metadata', 'name', 'trialEnd']);
 			if (!stripeCheck) return res.status(400).json({
 				status: 400,
 				message: 'Malformed body or invalid values, required keys are `email` and `userId` or `customerId`, allowed keys are `amount` and `metadata`.',

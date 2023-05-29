@@ -190,7 +190,7 @@ export default class StripeManager {
 				},
 			}],
 			subscription_data: {
-				trial_period_days: data.trialEnd && typeof parseFloat(data.trialEnd) === 'number' ? Math.round((Number(data.trialEnd) || 0)) || 0 : 0,
+				trial_period_days: data.trialEnd && typeof parseFloat(data.trialEnd) === 'number' ? Math.round((Number(data.trialEnd) || 0)) || undefined : undefined,
 				trial_settings: data.trialEnd && typeof parseFloat(data.trialEnd) === 'number' ? {
 					end_behavior: {
 						missing_payment_method: 'cancel',
