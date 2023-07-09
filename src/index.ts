@@ -88,8 +88,8 @@ export function catchError(error: Error) {
 	console.error(error);
 }
 
-export async function evalExecute(where: GatewayIdentifications | 'wss', code: string) {
-	if (where !== 'wss') return await WssManager.gatewayManager?.evaluate(where, code);
+export async function evalExecute(where: GatewayIdentifications | 'Wss', code: string) {
+	if (where !== 'Wss') return await WssManager.gatewayManager?.evaluate(where, code);
 
 	try {
 		const result = function (str: string) { return eval(str); }.call(WssManager, code);
